@@ -1,3 +1,4 @@
+import { translate } from '../../i18n/index.js'
 import type {
   AssistantBlockParam,
   FileBlockParam,
@@ -16,19 +17,21 @@ import type {
 } from './types.js'
 
 /**
- * 文件按 Files API 的 file_id（附件的 serverId）引用：图片用 image 块，其余用 document 块。
- * 发送前 streamReply 会先补齐 serverId；仍为 null 的是本地没有原件的附件，不进入请求。
+ * DeepSeek 按 Files API 的 file_id 引用附件；pi 按本地 id 读取原件并转换成图片或文本。
+ * DeepSeek 发送前补齐 serverId；本地模式不依赖上传后的 id。
  */
-const toFileBlocks = (files: FileAttachment[]): FileBlockParam[] =>
-  files.flatMap(({ serverId, isImage }) =>
-    serverId
+const toFileBlocks = (files: FileAttachment[], localFiles = false): FileBlockParam[] =>
+  files.flatMap(({ id, name, mimeType, serverId, isImage }): FileBlockParam[] =>
+    localFiles
       ? [
           {
             type: isImage ? 'image' : 'document',
-            source: { type: 'file', file_id: serverId },
+            source: { type: 'local', id, name, media_type: mimeType },
           },
         ]
-      : []
+      : serverId
+        ? [{ type: isImage ? 'image' : 'document', source: { type: 'file', file_id: serverId } }]
+        : []
   )
 
 const toReplyBlock = (block: OutputBlockStart, now: number): ReplyBlock | null => {
@@ -42,6 +45,8 @@ const toReplyBlock = (block: OutputBlockStart, now: number): ReplyBlock | null =
         signature: block.signature,
         startedAt: now,
       }
+    case 'tool_use':
+      return { ...block, status: 'pending' }
     case 'server_tool_use':
     case 'web_search_tool_result':
     case 'web_fetch_tool_result':
@@ -84,11 +89,14 @@ export const applyEvent = (
       blockIndexes.delete(event.index)
       const block = toReplyBlock(event.content_block, now)
       if (!block) {
-        // 客户端工具内容不保存；未完成的工具往返也不能作为续写前缀。
-        return event.content_block.type === 'tool_use' ? { ...next, prefix: false } : next
+        return next
       }
       blockIndexes.set(event.index, next.blocks.length)
-      return { ...next, blocks: [...next.blocks, block] }
+      return {
+        ...next,
+        prefix: block.type === 'tool_use' ? false : next.prefix,
+        blocks: [...next.blocks, block],
+      }
     }
     case 'content_block_delta': {
       const index = blockIndexes.get(event.index)
@@ -109,6 +117,13 @@ export const applyEvent = (
         if (block.type === 'text' && delta.type === 'citations_delta') {
           return { ...block, citations: [...(block.citations ?? []), delta.citation] }
         }
+        if (block.type === 'tool_use' && delta.type === 'input_json_delta') {
+          const inputJson = (block.inputJson ?? '') + delta.partial_json
+          if (inputJson.length > 65536) {
+            throw new Error(translate('githubInvalidArguments'))
+          }
+          return { ...block, inputJson }
+        }
         return block
       })
     }
@@ -118,11 +133,17 @@ export const applyEvent = (
         return next
       }
       blockIndexes.delete(event.index)
-      return updateBlock(next, index, (block) =>
-        block.type === 'thinking' && block.startedAt !== undefined && block.endedAt === undefined
+      return updateBlock(next, index, (block) => {
+        if (block.type === 'tool_use' && block.inputJson !== undefined) {
+          const input: unknown = JSON.parse(block.inputJson)
+          return { ...block, input, inputJson: undefined }
+        }
+        return block.type === 'thinking' &&
+          block.startedAt !== undefined &&
+          block.endedAt === undefined
           ? { ...block, endedAt: now }
           : block
-      )
+      })
     }
     case 'message_delta':
       return {
@@ -153,6 +174,20 @@ export const settleReply = (
     if (reply.stopReason === 'refusal' && (block.type === 'thinking' || block.type === 'text')) {
       return []
     }
+    if (block.type === 'tool_use' && !block.result) {
+      return [
+        {
+          ...block,
+          status: 'cancelled',
+          result: {
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: translate('appToolInterrupted'),
+            is_error: true,
+          },
+        },
+      ]
+    }
     return block.type === 'thinking' && block.startedAt !== undefined && block.endedAt === undefined
       ? [{ ...block, endedAt: now }]
       : [block]
@@ -176,6 +211,7 @@ export const canContinueReply = (reply: AssistantMessage): boolean => {
     reply.stopReason === 'tool_use' ||
     reply.blocks.some(
       (block) =>
+        block.type === 'tool_use' ||
         block.type === 'server_tool_use' ||
         block.type === 'web_search_tool_result' ||
         block.type === 'web_fetch_tool_result' ||
@@ -185,25 +221,29 @@ export const canContinueReply = (reply: AssistantMessage): boolean => {
     return false
   }
   return (
-    reply.status === 'stopped' ||
-    (reply.status === 'done' && reply.stopReason === 'max_tokens')
+    reply.status === 'stopped' || (reply.status === 'done' && reply.stopReason === 'max_tokens')
   )
 }
 
-/**
- * 已结束或停止且有回答文本的回复才放进上下文；被安全拒绝的轮次不回传。
- * 服务端模板提示不进入上下文。
- */
-const isUsableReply = (message: Message): message is AssistantMessage =>
-  message.role === 'assistant' &&
-  (message.status === 'done' || message.status === 'stopped') &&
-  message.stopReason !== 'refusal' &&
-  !message.blocks.some((block) => block.type === 'text' && block.isTemplate) &&
-  getReplyText(message) !== ''
+/** 已结束且有正文的回复进入上下文；工具已执行后即使回答失败，也保留工具结果，避免丢失写入记录。 */
+const isUsableReply = (message: Message): message is AssistantMessage => {
+  if (message.role !== 'assistant') {
+    return false
+  }
+  const hasToolRounds = (message.toolRoundEnds?.length ?? 0) > 0
+  return (
+    (message.status === 'done' ||
+      message.status === 'stopped' ||
+      (message.status === 'error' && hasToolRounds)) &&
+    message.stopReason !== 'refusal' &&
+    !message.blocks.some((block) => block.type === 'text' && block.isTemplate) &&
+    (getReplyText(message) !== '' || hasToolRounds)
+  )
+}
 
 /** 有文件时用内容块数组：先文件后文本，文件按 Files API 的 file_id 引用 */
-const toUserParam = ({ content, files }: UserMessage): MessageParam => {
-  const blocks = toFileBlocks(files)
+const toUserParam = ({ content, files }: UserMessage, localFiles = false): MessageParam => {
+  const blocks = toFileBlocks(files, localFiles)
   return blocks.length === 0
     ? { role: 'user', content }
     : {
@@ -214,16 +254,18 @@ const toUserParam = ({ content, files }: UserMessage): MessageParam => {
 
 /**
  * assistant 的内容块按历史与续写场景转换：
- * - 历史思考及其签名不回传；开启思考时续写只保留本轮非空白思考及其签名；
+ * - 应用工具轮次保留完整思考、签名和工具调用，匹配随后的 tool_result；
+ * - 其他历史思考及其签名不回传；开启思考时续写只保留本轮非空白思考及其签名；
  * - 文本块去掉 citations（服务端忽略）。相邻文本直接拼接，被思考或工具隔开的文本用空行连接；
  *   省略历史思考后仍保留其前后正文的空行；
  * - 工具调用和结果只保留 kind 为 read_link 的块，其他历史工具块不回传；
  * - 阅读链接结果原样回传，保留 signature：服务端解密后将页面拼回该轮提问末尾；
  */
 const toAssistantParam = (
-  { blocks }: AssistantMessage,
+  { blocks }: Pick<AssistantMessage, 'blocks'>,
   prefix = false,
-  thinking = false
+  thinking = false,
+  toolRound = false
 ): Extract<MessageParam, { role: 'assistant' }> => {
   const content: AssistantBlockParam[] = []
   // 成功阅读的网页靠签名恢复正文；缺少有效签名时，调用与结果都不回传。
@@ -258,21 +300,25 @@ const toAssistantParam = (
       continue
     }
     text = null
-    if (prefix && thinking && block.type === 'thinking') {
-      // 续写保留本轮思考，历史轮次的思考省略。
+    if (toolRound && block.type === 'tool_use') {
+      const { type, id, name, input } = block
+      content.push({ type, id, name, input })
+    } else if ((prefix || toolRound) && thinking && block.type === 'thinking') {
       const { type, thinking, signature } = block
       content.push({ type, thinking, signature: signature ?? '' })
     } else if (
       block.type === 'server_tool_use' &&
-      block.kind === 'read_link' &&
-      !unsignedReadLinks.has(block.id)
+      (toolRound || block.kind === 'read_link') &&
+      (toolRound || !unsignedReadLinks.has(block.id))
     ) {
       const { type, id, name, input, kind } = block
       content.push({ type, id, name, input, kind })
+    } else if (toolRound && block.type === 'web_search_tool_result') {
+      content.push(block)
     } else if (
       block.type === 'web_fetch_tool_result' &&
-      block.kind === 'read_link' &&
-      !unsignedReadLinks.has(block.tool_use_id)
+      (toolRound || block.kind === 'read_link') &&
+      (toolRound || !unsignedReadLinks.has(block.tool_use_id))
     ) {
       content.push(block)
     }
@@ -282,6 +328,31 @@ const toAssistantParam = (
     content: content.filter((block) => block.type !== 'text' || block.text !== ''),
   }
 }
+
+export const toToolExchange = (
+  blocks: ReplyBlock[],
+  providerMessage?: NonNullable<AssistantMessage['providerMessages']>[number]['message']
+): MessageParam[] => [
+  {
+    ...toAssistantParam({ blocks }, false, true, true),
+    ...(providerMessage ? { providerMessage } : {}),
+  },
+  {
+    role: 'user',
+    content: blocks.flatMap((block) =>
+      block.type === 'tool_use'
+        ? [
+            block.result ?? {
+              type: 'tool_result' as const,
+              tool_use_id: block.id,
+              content: translate('appToolInterrupted'),
+              is_error: true,
+            },
+          ]
+        : []
+    ),
+  },
+]
 
 /** 历史中会进入请求上下文的轮次：提问后紧跟可用回答的才保留 */
 export const getContextRounds = (history: Message[]): [UserMessage, AssistantMessage][] => {
@@ -298,14 +369,15 @@ export const getContextRounds = (history: Message[]): [UserMessage, AssistantMes
 
 /**
  * 把会话转成请求的 messages：只保留「提问 + 有回答的回复」成对的轮次，最后接上本轮提问。
- * 失败或没有回答的轮次不进上下文。续写时末尾再带上本轮 assistant。
+ * 无正文且没有工具执行记录的轮次不进上下文。续写时末尾再带上本轮 assistant。
  */
 export const toRequestMessages = (
   history: Message[],
   question: UserMessage,
   prefix?: AssistantMessage,
   thinking = prefix?.thinking ?? false,
-  latestReminder?: string
+  latestReminder?: string,
+  localFiles = false
 ): MessageParam[] => {
   const messages: MessageParam[] = []
   let previousReminder: string | undefined
@@ -318,14 +390,35 @@ export const toRequestMessages = (
   }
   for (const [user, reply] of getContextRounds(history)) {
     // 历史提问没有文字、附件也都没有 serverId 时，提问为空，连同回答一起省略。
-    if (!user.content && toFileBlocks(user.files).length === 0) {
+    if (!user.content && toFileBlocks(user.files, localFiles).length === 0) {
       continue
     }
     appendReminder(reply.latestReminder)
-    messages.push(toUserParam(user), toAssistantParam(reply))
+    messages.push(toUserParam(user, localFiles))
+    let start = 0
+    for (const end of reply.toolRoundEnds ?? []) {
+      messages.push(
+        ...toToolExchange(
+          reply.blocks.slice(start, end),
+          localFiles
+            ? reply.providerMessages?.find((round) => round.end === end)?.message
+            : undefined
+        )
+      )
+      start = end
+    }
+    const assistant = toAssistantParam({ blocks: reply.blocks.slice(start) })
+    if (localFiles) {
+      assistant.providerMessage = reply.providerMessages?.find(
+        (round) => round.end === reply.blocks.length
+      )?.message
+    }
+    if (assistant.content.length > 0 || assistant.providerMessage) {
+      messages.push(assistant)
+    }
   }
   appendReminder(latestReminder)
-  messages.push(toUserParam(question))
+  messages.push(toUserParam(question, localFiles))
   if (prefix?.prefix) {
     const assistant = toAssistantParam(prefix, true, thinking)
     // 没有非空白正文或有效思考时直接重发原问题，避免服务端拒绝空 Prefill。

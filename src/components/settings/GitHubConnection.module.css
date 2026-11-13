@@ -1,0 +1,118 @@
+.connection {
+  padding-block: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-primary);
+
+  h2 {
+    margin-block: 0 8px;
+    font-size: 18px;
+  }
+
+  p {
+    margin-block: 8px;
+    color: var(--dsw-alias-label-tertiary);
+  }
+
+  a {
+    color: var(--dsw-alias-brand-text);
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-block: 16px;
+  }
+
+  form p {
+    margin: 0;
+  }
+
+  label {
+    font-weight: 500;
+  }
+
+  input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 14px;
+    border: 1px solid var(--dsw-alias-border-l2);
+    border-radius: 12px;
+    background: var(--dsw-specific-input-major);
+    color: var(--dsw-alias-label-primary);
+    font: inherit;
+    font-size: 16px;
+  }
+
+  input:focus-visible,
+  a:focus-visible {
+    outline: 2px solid var(--dsw-alias-brand-primary);
+    outline-offset: 2px;
+  }
+
+  input[aria-invalid='true'] {
+    border-color: var(--dsw-alias-state-error-primary);
+  }
+
+  button {
+    min-height: 48px;
+  }
+}
+
+.connected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block: 20px;
+}
+
+.error {
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
+}
+
+.oauth {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-block: 16px;
+}
+
+.oauthOptions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  cursor: pointer;
+
+  input {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    min-height: 0;
+    padding: 0;
+    accent-color: var(--dsw-alias-brand-primary);
+  }
+}
+
+.tokenFallback {
+  margin-block: 16px;
+  padding-block-start: 12px;
+  border-block-start: 1px solid var(--dsw-alias-border-l2);
+
+  summary {
+    min-height: 36px;
+    cursor: pointer;
+  }
+
+  summary:focus-visible {
+    outline: 2px solid var(--dsw-alias-brand-primary);
+    outline-offset: 2px;
+  }
+}

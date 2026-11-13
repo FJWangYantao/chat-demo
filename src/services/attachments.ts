@@ -141,13 +141,13 @@ const enqueueUpload = (
   })
 
 /**
- * 上传任务按附件的本地 id 登记：输入框选中即开始上传，全部成功后携带 serverId 发送，
+ * 上传任务按附件的本地 id 登记：原生通道选中即上传，pi 附件仅标记本地就绪；原生上传成功后携带 serverId 发送，
  * 不会重复上传；导入的历史附件没有任务，发送前按本地原件补传。
  * 任务只在内存里，历史附件补传未完成时，刷新后会在下次请求前重新上传。
  */
 export type UploadTask =
   | { status: 'uploading' }
-  | { status: 'done'; serverId: string }
+  | { status: 'done'; serverId: string | null }
   | { status: 'error'; error: TranslationMessage; retryable: boolean }
 
 type UploadState = { tasks: Record<string, UploadTask> }
@@ -162,6 +162,8 @@ const setTask = (id: string, task: UploadTask | null) =>
   }))
 
 const pending = new Map<string, { promise: Promise<string>; controller: AbortController }>()
+
+export const stageLocalAttachment = (id: string) => setTask(id, { status: 'done', serverId: null })
 
 /** 开始（或复用进行中的）上传，返回服务端 file_id；失败时任务记为 error 并抛出原错误 */
 export const uploadAttachment = (

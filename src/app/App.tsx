@@ -14,7 +14,9 @@ import { closeSearchPanel } from '../components/search/searchPanelState.js'
 import { SessionView } from '../components/session/SessionView.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
-import { ensureApiKey } from '../components/settings/settingsDialogState.js'
+import { ensureChatProvider, openSettings } from '../components/settings/settingsDialogState.js'
+import { loadProviderCatalog } from '../services/providers.js'
+import { restoreGitHubSession } from '../services/apps/github.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
@@ -69,8 +71,16 @@ export const App = () => {
 
   useEffect(() => {
     void initChat()
-    // 首次打开先在设置里输入 API Key
-    ensureApiKey()
+    ensureChatProvider()
+    void loadProviderCatalog()
+    const url = new URL(window.location.href)
+    const authResult = url.searchParams.get('github_auth')
+    if (authResult) {
+      url.searchParams.delete('github_auth')
+      window.history.replaceState(null, '', url.href)
+      openSettings('apps')
+    }
+    void restoreGitHubSession(authResult)
   }, [])
 
   return (

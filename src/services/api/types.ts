@@ -4,7 +4,9 @@
  * 声明 deepseek_web_search / deepseek_read_url 或设置 safety_check.level 为 high 时进入扩展模式。
  */
 
-export type ChatModel = 'deepseek-flash' | 'deepseek-v4-pro'
+import type { AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai'
+
+export type ChatModel = string
 
 // ---------- 响应：内容块 ----------
 
@@ -118,20 +120,40 @@ export type ServerToolBlock =
   | WebSearchToolResultBlock
   | WebFetchToolResultBlock
 
-/** 用于识别客户端工具调用的内容块类型 */
 export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: unknown }
+
+export type ClientTool = {
+  name: string
+  description: string
+  input_schema: {
+    type: 'object'
+    properties: Record<string, unknown>
+    required: string[]
+    additionalProperties: false
+  }
+}
+
+export type ToolResultBlockParam = {
+  type: 'tool_result'
+  tool_use_id: string
+  content: string
+  is_error?: boolean
+}
 
 // ---------- 请求 ----------
 
 export type TextBlockParam = { type: 'text'; text: string }
 
 /**
- * 文件块：引用经 Files API 上传的文件，图片用 image、其余用 document；
- * 图片请求需带 anthropic-beta: files-api-2025-04-14；扩展模式不支持 document，返回 400。
+ * 文件块：DeepSeek 引用 Files API 文件，pi 使用本地引用或内联 Base64 图片。
+ * DeepSeek 图片请求需带 files-api beta；其扩展模式不支持 document。
  */
 export type FileBlockParam = {
   type: 'image' | 'document'
-  source: { type: 'file'; file_id: string }
+  source:
+    | { type: 'file'; file_id: string }
+    | { type: 'local'; id: string; name: string; media_type: string }
+    | { type: 'base64'; data: string; media_type: string }
 }
 
 /** 接口接受的调用块；历史只回传 kind 为 read_link 的调用 */
@@ -148,6 +170,7 @@ export type WebFetchToolResultBlockParam = WebFetchToolResultBlock
 
 export type AssistantBlockParam =
   | TextBlockParam
+  | ToolUseBlock
   | ThinkingBlock
   | ServerToolUseBlockParam
   | WebSearchToolResultBlockParam
@@ -157,8 +180,8 @@ export type AssistantBlockParam =
 export type MessageParam =
   /** Chat Engine 扩展角色，位于对应 user 前；需服务端支持 latest_reminder。 */
   | { role: 'latest_reminder'; content: string }
-  | { role: 'user'; content: string | (FileBlockParam | TextBlockParam)[] }
-  | { role: 'assistant'; content: AssistantBlockParam[] }
+  | { role: 'user'; content: string | (FileBlockParam | TextBlockParam | ToolResultBlockParam)[] }
+  | { role: 'assistant'; content: AssistantBlockParam[]; providerMessage?: PiAssistantMessage }
 
 /** 开启联网搜索与边想边搜 */
 export type DeepseekWebSearchTool = {
@@ -177,7 +200,7 @@ export type CreateMessageRequest = {
   system: string
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
-  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool)[]
+  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool | ClientTool)[]
   safety_check: { level: 'high' }
   title?: { enabled: boolean }
 }

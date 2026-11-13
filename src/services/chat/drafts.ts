@@ -7,9 +7,12 @@ import {
   resolveMimeType,
   uploadAttachment,
   validateFiles,
+  stageLocalAttachment,
   type UploadTask,
 } from '../attachments.js'
 import type { FileAttachment } from './types.js'
+import { getActiveModelConfiguration, NATIVE_PROVIDER } from '../providers.js'
+import { isProviderTextFile } from '../api/piFiles.js'
 
 export type DraftAttachment = {
   /** 本地标识，也是 IndexedDB 原件与上传任务的 key */
@@ -47,6 +50,10 @@ export const setDraftText = (sessionId: string | null, text: string) =>
   updateDraft(sessionId, (draft) => ({ ...draft, text }))
 
 const upload = (attachment: DraftAttachment, apiKey: string) => {
+  if (getActiveModelConfiguration().provider !== NATIVE_PROVIDER) {
+    stageLocalAttachment(attachment.id)
+    return
+  }
   // 上传任务负责记录错误，输入框的附件卡片展示失败及重试入口。
   void uploadAttachment(
     apiKey,
@@ -65,6 +72,16 @@ export const addDraftFiles = (
 ): TranslationMessage | null => {
   if (files.length === 0) {
     return null
+  }
+  const configuration = getActiveModelConfiguration()
+  if (
+    configuration.provider !== NATIVE_PROVIDER &&
+    files.some((file) => {
+      const image = isImage(resolveMimeType(file))
+      return image ? !configuration.imageInput : !isProviderTextFile(file.name, file.type)
+    })
+  ) {
+    return { key: 'providerUnsupportedAttachment' }
   }
   const error = validateFiles(files, getDraft(sessionId).attachments.length)
   if (error) {
@@ -95,16 +112,16 @@ export const retryDraftAttachment = (
   }
 }
 
-/** 发送按钮和实际提交共用规则：有内容，且全部附件已上传成功。 */
+/** 发送按钮和实际提交共用规则：有内容，且全部附件已就绪。 */
 export const prepareDraftMessage = (draft: Draft, tasks: Record<string, UploadTask>) => {
   const text = draft.text.trim()
   if (!text && draft.attachments.length === 0) {
     return null
   }
-  const files: (FileAttachment & { serverId: string; blob: Blob })[] = []
+  const files: (FileAttachment & { blob: Blob })[] = []
   for (const attachment of draft.attachments) {
     const task = tasks[attachment.id]
-    if (task?.status !== 'done' || !task.serverId) {
+    if (task?.status !== 'done') {
       return null
     }
     files.push({

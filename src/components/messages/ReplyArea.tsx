@@ -1,6 +1,6 @@
 import { useTranslate } from '../../i18n/index.js'
 import clsx from 'clsx'
-import { memo, useEffect, useState, type ReactNode } from 'react'
+import { memo, useEffect, useId, useState, type ReactNode } from 'react'
 import {
   IconBrowseOutline16,
   IconBrowseWarningOutline16,
@@ -13,6 +13,8 @@ import {
   IconSearchOutline16,
   IconSearchWarningOutline16,
   IconThinkOutline16,
+  IconGitHub16,
+  IconEditOutline16,
 } from '../base/icons.js'
 import type { AssistantMessage } from '../../services/chat/types.js'
 import {
@@ -30,6 +32,7 @@ import {
 } from '../../services/chat/view.js'
 import { Tooltip } from '../base/Tooltip.js'
 import { Markdown } from '../markdown/Markdown.js'
+import { ToolCallContent } from './ToolCalls.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
 import styles from './ReplyArea.module.css'
@@ -54,11 +57,13 @@ const useTicker = (active: boolean, interval: number) => {
  * 未开启时只有工具步骤（如普通搜索的「已阅读 N 个网页」）。
  */
 export const ReplyArea = memo(function ReplyArea({
+  sessionId,
   message,
   view,
   streaming,
   hasResponse,
 }: {
+  sessionId: string
   message: AssistantMessage
   view: ReplyView
   streaming: boolean
@@ -66,6 +71,11 @@ export const ReplyArea = memo(function ReplyArea({
 }) {
   useTranslate()
   const [open, setOpen] = useState(true)
+  const stepsId = useId()
+  const needsApproval =
+    streaming &&
+    view.steps.some((step) => step.type === 'app_tool' && step.call.status === 'approval')
+  const expanded = open || needsApproval
   const titleActive = streaming && !hasResponse
   useTicker(titleActive, 1000)
   if (view.steps.length === 0 && !(message.thinking && streaming)) {
@@ -78,20 +88,28 @@ export const ReplyArea = memo(function ReplyArea({
   return (
     <div className={styles.area}>
       {title ? (
-        <div className={styles.title} onClick={() => setOpen((value) => !value)}>
+        <button
+          type="button"
+          className={styles.title}
+          aria-expanded={expanded}
+          aria-controls={stepsId}
+          disabled={needsApproval}
+          onClick={() => setOpen((value) => !value)}
+        >
           <span className={clsx(styles.titleIcon, stopped && styles.stoppedIcon)}>
             <IconThinkOutline16 />
           </span>
           <span className={clsx(styles.titleText, titleActive && styles.shimmer)}>{title}</span>
-          {open ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
-        </div>
+          {expanded ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
+        </button>
       ) : null}
-      {open || !title ? (
-        <div className={styles.steps}>
+      {expanded || !title ? (
+        <div id={stepsId} className={styles.steps}>
           {view.steps.map((step, index) => (
             <StepItem
               key={stepKey(step, index)}
               step={step}
+              sessionId={sessionId}
               message={message}
               sources={view.sources}
               streaming={streaming}
@@ -105,18 +123,23 @@ export const ReplyArea = memo(function ReplyArea({
 })
 
 const stepKey = (step: Step, index: number) =>
-  step.type === 'thinking' || step.type === 'text' || step.type === 'search'
+  step.type === 'thinking' ||
+  step.type === 'text' ||
+  step.type === 'search' ||
+  step.type === 'app_tool'
     ? step.key
     : `${step.type}-${index}`
 
 const StepItem = ({
   step,
+  sessionId,
   message,
   sources,
   streaming,
   isLast,
 }: {
   step: Step
+  sessionId: string
   message: AssistantMessage
   sources: Source[]
   streaming: boolean
@@ -149,6 +172,20 @@ const StepItem = ({
             sources={sources}
           />
         </ContentItem>
+      )
+    case 'app_tool':
+      return (
+        <ToolRow
+          icon={step.call.name === 'github_create_issue' ? <IconEditOutline16 /> : <IconGitHub16 />}
+          isLast={isLast}
+        >
+          <ToolCallContent
+            call={step.call}
+            sessionId={sessionId}
+            messageId={message.id}
+            streaming={streaming}
+          />
+        </ToolRow>
       )
     case 'search':
       return <SearchRow step={step} message={message} streaming={streaming} isLast={isLast} />

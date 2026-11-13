@@ -6,7 +6,7 @@ import type {
   WebSearchResult,
   WebSearchToolResultBlock,
 } from '../api/types.js'
-import type { AssistantMessage, ThinkingPart } from './types.js'
+import type { AssistantMessage, ThinkingPart, ToolCallPart } from './types.js'
 
 /**
  * 由回复的内容块推导界面需要的结构：思考与工具步骤的时间线、带引用角标的正文、可引用的来源列表。
@@ -66,7 +66,16 @@ export type ThinkingStep = { type: 'thinking'; key: string; blocks: ThinkingPart
 /** 工具调用前输出的说明文字 */
 export type PreambleStep = { type: 'text'; key: string; markdown: string }
 
-export type Step = SearchStep | OpenStep | FindStep | ReadLinkStep | ThinkingStep | PreambleStep
+export type AppToolStep = { type: 'app_tool'; key: string; call: ToolCallPart }
+
+export type Step =
+  | SearchStep
+  | OpenStep
+  | FindStep
+  | ReadLinkStep
+  | ThinkingStep
+  | PreambleStep
+  | AppToolStep
 
 export type ReplyView = {
   steps: Step[]
@@ -246,6 +255,11 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
       }
       return
     }
+    if (block.type === 'tool_use') {
+      flushPreamble()
+      steps.push({ type: 'app_tool', key: block.id, call: block })
+      return
+    }
     if (block.type !== 'server_tool_use') {
       return
     }
@@ -373,6 +387,12 @@ export const getAreaTitle = (
   now: number,
   hasResponse = view.answer !== null
 ) => {
+  if (
+    streaming &&
+    view.steps.some((step) => step.type === 'app_tool' && step.call.status === 'approval')
+  ) {
+    return translate('appToolAwaitingApproval')
+  }
   if (hasResponse) {
     const count = getTotalThinkingSeconds(view.steps, now)
     if (count === null) {
@@ -384,6 +404,13 @@ export const getAreaTitle = (
     return translate('messageThinkStopped')
   }
   const last = view.steps.at(-1)
+  if (last?.type === 'app_tool') {
+    if (last.call.status === 'pending' || last.call.status === 'running') {
+      return translate(
+        last.call.name === 'github_create_issue' ? 'githubCreatingIssue' : 'githubReading'
+      )
+    }
+  }
   if (last?.type === 'search' && last.status === 'wip') {
     return translate(isImageSearchKind(last.kind) ? 'imageSearching' : 'deepSearchSearching')
   }

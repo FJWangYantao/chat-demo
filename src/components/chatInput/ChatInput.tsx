@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   IconGlobeLanguageOutline14,
+  IconGitHub16,
   IconPaperclipOutline16,
   IconSendOutline16,
   IconStopFill16,
@@ -23,7 +24,13 @@ import {
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
 import { Tooltip } from '../base/Tooltip.js'
-import { ensureApiKey } from '../settings/settingsDialogState.js'
+import { ensureApiKey, ensureChatProvider, openSettings } from '../settings/settingsDialogState.js'
+import {
+  getActiveModelConfiguration,
+  useProviders,
+  NATIVE_PROVIDER,
+} from '../../services/providers.js'
+import { useGitHub } from '../../services/apps/github.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
@@ -53,6 +60,11 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
+  const github = useGitHub((state) => state.connection)
+  useProviders((state) => state.active)
+  useProviders((state) => state.profiles)
+  const modelConfiguration = getActiveModelConfiguration()
+  const native = modelConfiguration.provider === NATIVE_PROVIDER
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
@@ -75,7 +87,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   }, [t])
 
   const acceptFiles = (files: File[]) => {
-    if (files.length === 0 || useChatStore.getState().importingHistory || !ensureApiKey()) {
+    if (files.length === 0 || useChatStore.getState().importingHistory || !ensureChatProvider()) {
       return
     }
     const error = addDraftFiles(sessionId, files, useSettings.getState().apiKey ?? '')
@@ -85,7 +97,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   }
   const retryFile = useCallback(
     (id: string) => {
-      if (!useChatStore.getState().importingHistory && ensureApiKey()) {
+      if (!useChatStore.getState().importingHistory && ensureChatProvider()) {
         retryDraftAttachment(sessionId, id, useSettings.getState().apiKey ?? '')
       }
     },
@@ -141,7 +153,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureApiKey() || !sendMessage(sessionId)) {
+    if (!ensureChatProvider() || !sendMessage(sessionId)) {
       return
     }
     stopReadAloud()
@@ -161,6 +173,19 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         }
       }}
     >
+      <div className={styles.modelRow}>
+        <button
+          type="button"
+          className={styles.modelButton}
+          onClick={() => openSettings('providers')}
+          aria-label={t('providerChooseModel')}
+        >
+          {modelConfiguration.provider === NATIVE_PROVIDER
+            ? 'DeepSeek'
+            : modelConfiguration.provider}{' '}
+          · {modelConfiguration.model}
+        </button>
+      </div>
       <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
       <div className={styles.textareaWrapper}>
         <textarea
@@ -205,25 +230,45 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
           <Tooltip content={t('deactivatedThinkTooltip')}>
             <button
               type="button"
-              className={clsx(styles.toggle, thinking && styles.selected)}
+              className={clsx(
+                styles.toggle,
+                thinking && modelConfiguration.reasoning && styles.selected
+              )}
               aria-label={t('thinkingSwitch')}
-              aria-pressed={thinking}
+              aria-pressed={thinking && modelConfiguration.reasoning}
+              disabled={!modelConfiguration.reasoning}
               onClick={() => setThinking(!thinking)}
             >
               <IconThinkOutline14 />
               <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
             </button>
           </Tooltip>
-          <Tooltip content={t('deactivatedSearchTooltip')}>
+          <Tooltip content={t(native ? 'deactivatedSearchTooltip' : 'providerNativeSearchOnly')}>
             <button
               type="button"
-              className={clsx(styles.toggle, search && styles.selected)}
+              className={clsx(styles.toggle, search && native && styles.selected)}
               aria-label={t('search')}
-              aria-pressed={search}
+              aria-pressed={search && native}
+              disabled={!native}
               onClick={() => setSearch(!search)}
             >
               <IconGlobeLanguageOutline14 />
               <span className={styles.toggleLabel}>{t('search')}</span>
+            </button>
+          </Tooltip>
+          <Tooltip
+            content={github ? t('githubConnected', { login: github.login }) : t('settingsApps')}
+          >
+            <button
+              type="button"
+              className={clsx(styles.toggle, github && styles.selected)}
+              aria-label={
+                github ? t('githubConnected', { login: github.login }) : t('githubConnect')
+              }
+              onClick={() => openSettings('apps')}
+            >
+              <IconGitHub16 />
+              <span className={styles.toggleLabel}>GitHub</span>
             </button>
           </Tooltip>
         </div>
@@ -247,7 +292,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             icon={<IconPaperclipOutline16 />}
             tooltip={t('uploadFile')}
             disabled={importingHistory}
-            onClick={() => ensureApiKey() && fileInputRef.current?.click()}
+            onClick={() => ensureChatProvider() && fileInputRef.current?.click()}
           />
           <input
             ref={fileInputRef}

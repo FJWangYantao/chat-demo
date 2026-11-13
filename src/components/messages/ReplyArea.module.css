@@ -7,6 +7,11 @@
   align-items: center;
   height: 34px;
   margin-bottom: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: start;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   user-select: none;
@@ -15,6 +20,20 @@
   &:hover {
     color: var(--dsw-alias-label-primary);
   }
+
+  &:focus-visible {
+    outline: 2px solid var(--dsw-alias-brand-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.steps {
+  min-width: 0;
 }
 
 .titleIcon {

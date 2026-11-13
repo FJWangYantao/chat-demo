@@ -1,4 +1,6 @@
 import type { TranslationMessage } from '../../i18n/index.js'
+import type { AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai'
+import type { ModelConfiguration } from '../api/providerTypes.js'
 import type { ApiErrorKind } from '../api/client.js'
 import type {
   ChatModel,
@@ -7,6 +9,8 @@ import type {
   StopDetails,
   StopReason,
   TextCitation,
+  ToolResultBlockParam,
+  ToolUseBlock,
 } from '../api/types.js'
 
 /**
@@ -40,7 +44,7 @@ export type UserMessage = MessageBranch & {
   createdAt: number
 }
 
-/** 思考块：thinking_delta 累积，签名随 signature_delta 到达；历史轮次的思考服务端会丢弃，不回传 */
+/** 思考块及签名；应用工具往返时完整回传，其余历史思考省略。 */
 export type ThinkingPart = {
   type: 'thinking'
   thinking: string
@@ -62,8 +66,14 @@ export type TextPart = {
   isTemplate?: boolean
 }
 
-/** 服务端工具调用与结果块按协议原样保存；历史请求只回传 read_link 调用与结果 */
-export type ReplyBlock = ThinkingPart | TextPart | ServerToolBlock
+export type ToolCallPart = ToolUseBlock & {
+  status: 'pending' | 'approval' | 'running' | 'done' | 'error' | 'cancelled'
+  inputJson?: string
+  result?: ToolResultBlockParam
+}
+
+/** 应用工具的执行状态和结果随内容块保存在本地。 */
+export type ReplyBlock = ThinkingPart | TextPart | ServerToolBlock | ToolCallPart
 
 /**
  * pending：已发出请求，还没收到事件；streaming：正在接收；
@@ -77,6 +87,8 @@ export type AssistantMessage = MessageBranch & {
   createdAt: number
   /** 未记录模型时为 null，续写使用当前默认模型。 */
   model: ChatModel | null
+  modelConfig?: ModelConfiguration
+  providerMessages?: { end: number; message: PiAssistantMessage }[]
   /** 请求时是否开启深度思考 */
   thinking?: boolean
   /** 请求时是否声明 deepseek_web_search；关闭时仍声明 deepseek_read_url */
@@ -88,6 +100,8 @@ export type AssistantMessage = MessageBranch & {
   status: ReplyStatus
   /** 可识别的内容块按接收顺序排列；续写产生的块追加在已有块之后 */
   blocks: ReplyBlock[]
+  /** 每次工具调用响应的块末端，用于恢复完整的 assistant / tool_result 往返。 */
+  toolRoundEnds?: number[]
   stopReason?: StopReason
   stopDetails?: StopDetails
   /** 最近一次请求的用量，续写后更新 */

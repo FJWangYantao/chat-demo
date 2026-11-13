@@ -54,12 +54,18 @@ export const AssistantMessage = memo(function AssistantMessage({
     .filter(Boolean)
     .join('\n\n')
   const copyText = responseText || notice?.text
-  const waiting = streaming && view.steps.length === 0 && !view.answer && !message.thinking
+  const waiting =
+    streaming &&
+    view.steps.length === 0 &&
+    !view.answer &&
+    !message.thinking &&
+    !message.blocks.some((block) => block.type === 'tool_use')
   const summaryEntry = `${message.id}-summary`
   return (
     <div className={styles.message}>
       {refused ? null : (
         <ReplyArea
+          sessionId={sessionId}
           message={message}
           view={view}
           streaming={streaming}
@@ -102,7 +108,14 @@ export const AssistantMessage = memo(function AssistantMessage({
                 <button
                   type="button"
                   className={styles.noticeAction}
-                  onClick={() => openSettings('data')}
+                  onClick={() =>
+                    openSettings(
+                      message.modelConfig?.provider &&
+                        message.modelConfig.provider !== 'deepseek-native'
+                        ? 'providers'
+                        : 'data'
+                    )
+                  }
                 >
                   {t('changeApiKey')}
                 </button>
