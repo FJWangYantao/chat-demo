@@ -2,7 +2,6 @@ import clsx from 'clsx'
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   IconGlobeLanguageOutline14,
-  IconGitHub16,
   IconPaperclipOutline16,
   IconSendOutline16,
   IconStopFill16,
@@ -24,13 +23,12 @@ import {
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
 import { Tooltip } from '../base/Tooltip.js'
-import { ensureApiKey, ensureChatProvider, openSettings } from '../settings/settingsDialogState.js'
+import { ensureApiKey, ensureChatProvider } from '../settings/settingsDialogState.js'
 import {
   getActiveModelConfiguration,
   useProviders,
   NATIVE_PROVIDER,
 } from '../../services/providers.js'
-import { useGitHub } from '../../services/apps/github.js'
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
@@ -60,7 +58,6 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const importingHistory = useChatStore((state) => state.importingHistory)
   const isMobile = useIsMobile()
   const search = useSettings((state) => state.search)
-  const github = useGitHub((state) => state.connection)
   useProviders((state) => state.active)
   useProviders((state) => state.profiles)
   const modelConfiguration = getActiveModelConfiguration()
@@ -173,19 +170,6 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
         }
       }}
     >
-      <div className={styles.modelRow}>
-        <button
-          type="button"
-          className={styles.modelButton}
-          onClick={() => openSettings('providers')}
-          aria-label={t('providerChooseModel')}
-        >
-          {modelConfiguration.provider === NATIVE_PROVIDER
-            ? 'DeepSeek'
-            : modelConfiguration.provider}{' '}
-          · {modelConfiguration.model}
-        </button>
-      </div>
       <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
       <div className={styles.textareaWrapper}>
         <textarea
@@ -254,21 +238,6 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
             >
               <IconGlobeLanguageOutline14 />
               <span className={styles.toggleLabel}>{t('search')}</span>
-            </button>
-          </Tooltip>
-          <Tooltip
-            content={github ? t('githubConnected', { login: github.login }) : t('settingsApps')}
-          >
-            <button
-              type="button"
-              className={clsx(styles.toggle, github && styles.selected)}
-              aria-label={
-                github ? t('githubConnected', { login: github.login }) : t('githubConnect')
-              }
-              onClick={() => openSettings('apps')}
-            >
-              <IconGitHub16 />
-              <span className={styles.toggleLabel}>GitHub</span>
             </button>
           </Tooltip>
         </div>
