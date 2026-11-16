@@ -220,10 +220,7 @@ export const readMessageEvent = (value: unknown): MessageStreamEvent | null => {
       }
       return {
         ...value,
-        delta: {
-          ...value.delta,
-          title: isOptionalString(value.delta.title) ? value.delta.title : undefined,
-        },
+        delta: value.delta,
         usage: isUsage(value.usage) ? value.usage : undefined,
       } as MessageStreamEvent
     case 'message_stop':

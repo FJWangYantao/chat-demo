@@ -5,6 +5,36 @@ declare module '*.module.css' {
 
 declare module '*.css' {}
 
+declare module '*.svg' {
+  const url: string
+  export default url
+}
+
+declare module '*.png' {
+  const url: string
+  export default url
+}
+
+declare module '*.webp' {
+  const url: string
+  export default url
+}
+
+declare module '*.vrm' {
+  const url: string
+  export default url
+}
+
+declare module '*.vrma' {
+  const url: string
+  export default url
+}
+
+declare module '*.glb' {
+  const url: string
+  export default url
+}
+
 /** 公开 API 的地址，见 rspack.config.ts 的 createConfig */
 declare const __API_ORIGIN__: string
 

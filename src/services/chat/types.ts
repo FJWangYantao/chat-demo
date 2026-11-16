@@ -2,6 +2,7 @@ import type { TranslationMessage } from '../../i18n/index.js'
 import type { AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai'
 import type { ModelConfiguration } from '../api/providerTypes.js'
 import type { ApiErrorKind } from '../api/client.js'
+import type { SearchConfig } from '../search/types.js'
 import type {
   ChatModel,
   MessageUsage,
@@ -91,8 +92,10 @@ export type AssistantMessage = MessageBranch & {
   providerMessages?: { end: number; message: PiAssistantMessage }[]
   /** 请求时是否开启深度思考 */
   thinking?: boolean
-  /** 请求时是否声明 deepseek_web_search；关闭时仍声明 deepseek_read_url */
+  /** 旧协议是否声明 deepseek_web_search；新协议是否开启智能搜索。 */
   search?: boolean
+  /** 新回复的独立搜索快照；旧回复和静态兼容路径没有此字段。 */
+  searchConfig?: SearchConfig
   /** 本轮请求的系统信息快照；各回答版本独立保存，续写沿用。历史消息中缺省的快照保持为空。 */
   latestReminder?: string
   /** 是否允许作为续写前缀；仍需满足回复状态与内容限制。 */

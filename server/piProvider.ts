@@ -5,6 +5,8 @@ import {
   createProvider,
   lazyApi,
   type Api,
+  type AssistantMessage,
+  type Context,
   type Model,
   type ProviderStreams,
   type TranscriptContext,
@@ -13,12 +15,16 @@ import { builtinModels } from '@earendil-works/pi-ai/providers/all'
 import type { ProxyAssistantMessageEvent } from '@earendil-works/pi-agent-core'
 import {
   CUSTOM_PROVIDER,
+  MAGPIE_PROVIDER,
   PROVIDER_APIS,
   type CatalogProvider,
   type ModelConfiguration,
 } from '../src/services/api/providerTypes.ts'
+import { magpieGatewayBaseUrl } from './magpie.ts'
+import { isSameOriginAlias, isTrustedRequestOrigin } from './requestOrigin.ts'
 
 const models = builtinModels()
+const localHostnames = new Set(['localhost', '127.0.0.1', '[::1]'])
 const supportedApis = new Set<string>([...PROVIDER_APIS, 'mistral-conversations'])
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -89,14 +95,20 @@ const readConfiguration = (value: unknown): ModelConfiguration => {
 }
 
 const resolveModel = (configuration: ModelConfiguration) => {
-  if (configuration.provider === CUSTOM_PROVIDER) {
+  if ([CUSTOM_PROVIDER, MAGPIE_PROVIDER].includes(configuration.provider)) {
     if (!configuration.baseUrl || !Object.hasOwn(customApis, configuration.api)) {
       throw new Error('Select a supported API and provide its base URL.')
+    }
+    if (
+      configuration.provider === MAGPIE_PROVIDER &&
+      configuration.baseUrl !== magpieGatewayBaseUrl()
+    ) {
+      throw new Error('Use the local Magpie gateway configured by this application server.')
     }
     const model: Model<Api> = {
       id: configuration.model,
       name: configuration.model,
-      provider: CUSTOM_PROVIDER,
+      provider: configuration.provider,
       api: configuration.api,
       baseUrl: configuration.baseUrl,
       reasoning: configuration.reasoning,
@@ -108,7 +120,7 @@ const resolveModel = (configuration: ModelConfiguration) => {
     const runtime = createModels()
     runtime.setProvider(
       createProvider({
-        id: CUSTOM_PROVIDER,
+        id: configuration.provider,
         models: [model],
         auth: { apiKey: { name: 'Custom API key', resolve: async () => ({ auth: {} }) } },
         api: lazyApi(customApis[configuration.api]),
@@ -142,6 +154,47 @@ const resolveModel = (configuration: ModelConfiguration) => {
     throw new Error('This provider requires a custom API base URL.')
   }
   return { model, runtime: models }
+}
+
+export const validateProviderConfiguration = (value: unknown): ModelConfiguration => {
+  const configuration = readConfiguration(value)
+  resolveModel(configuration)
+  return configuration
+}
+
+export const completeProviderSimple = async (options: {
+  configuration: unknown
+  apiKey: string
+  context: Context
+  signal?: AbortSignal
+  maxTokens?: number
+  sessionId?: string
+  reasoning?: boolean
+  fetchImpl?: typeof fetch
+}): Promise<AssistantMessage> => {
+  const configuration = readConfiguration(options.configuration)
+  const { model, runtime } = resolveModel(configuration)
+  const message = await runtime.completeSimple(model, options.context, {
+    apiKey: options.apiKey,
+    signal: options.signal,
+    maxRetries: 0,
+    transport: 'sse',
+    timeoutMs: 120000,
+    maxTokens:
+      typeof options.maxTokens === 'number' &&
+      Number.isInteger(options.maxTokens) &&
+      options.maxTokens > 0
+        ? Math.min(options.maxTokens, model.maxTokens, 16384)
+        : Math.min(model.maxTokens, 16384),
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.reasoning && model.reasoning ? { reasoning: 'medium' as const } : {}),
+    ...(options.fetchImpl ? { fetch: options.fetchImpl } : {}),
+  })
+  if (message.stopReason === 'error') {
+    const detail = message.errorMessage ?? 'Provider request failed.'
+    throw new Error(options.apiKey ? detail.replaceAll(options.apiKey, '[redacted]') : detail)
+  }
+  return message
 }
 
 const readBody = (request: IncomingMessage): Promise<unknown> =>
@@ -188,8 +241,7 @@ export const createPiProviderMiddleware = (
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
     if (
-      request.headers.host !== origin.host ||
-      (request.headers.origin && request.headers.origin !== origin.origin) ||
+      !isTrustedRequestOrigin(request, origin) ||
       request.headers['sec-fetch-site'] === 'cross-site'
     ) {
       json(response, 403, { error: 'Untrusted request origin.' })
@@ -208,7 +260,7 @@ export const createPiProviderMiddleware = (
       return
     }
     if (
-      request.headers.origin !== origin.origin ||
+      !isSameOriginAlias(origin, request.headers.origin) ||
       !request.headers['content-type']?.includes('application/json')
     ) {
       json(response, 403, { error: 'Use the application to send provider requests.' })
@@ -236,9 +288,15 @@ export const createPiProviderMiddleware = (
         throw new Error('Invalid agent transcript.')
       }
       const configuration = readConfiguration(value.model)
-      if (!apiKey || (apiKey === 'local' && configuration.provider !== CUSTOM_PROVIDER)) {
+      if (
+        !apiKey ||
+        (apiKey === 'local' && ![CUSTOM_PROVIDER, MAGPIE_PROVIDER].includes(configuration.provider))
+      ) {
         json(response, 401, { error: 'Configure an API key for this provider.' })
         return
+      }
+      if (configuration.provider === MAGPIE_PROVIDER && !localHostnames.has(origin.hostname)) {
+        throw new Error('Magpie connections require a local application server.')
       }
       const { model, runtime } = resolveModel(configuration)
       const context = value.context as unknown as TranscriptContext
@@ -254,7 +312,12 @@ export const createPiProviderMiddleware = (
         maxRetries: 0,
         transport: 'sse',
         timeoutMs: 120000,
-        maxTokens: Math.min(model.maxTokens, 16384),
+        maxTokens:
+          typeof options.maxTokens === 'number' &&
+          Number.isInteger(options.maxTokens) &&
+          options.maxTokens > 0
+            ? Math.min(options.maxTokens, model.maxTokens, 16384)
+            : Math.min(model.maxTokens, 16384),
         ...(typeof options.sessionId === 'string' ? { sessionId: options.sessionId } : {}),
         ...(options.reasoning && model.reasoning ? { reasoning: 'medium' as const } : {}),
       })

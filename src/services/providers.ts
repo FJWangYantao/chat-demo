@@ -38,7 +38,8 @@ const readProfiles = (): { active: string; profiles: Record<string, ProviderProf
           typeof value.baseUrl === 'string' &&
           typeof value.api === 'string' &&
           typeof value.reasoning === 'boolean' &&
-          typeof value.imageInput === 'boolean'
+          typeof value.imageInput === 'boolean' &&
+          (value.toolCalling === undefined || typeof value.toolCalling === 'boolean')
         ) {
           profiles[id] = value as ProviderProfile
         }
@@ -79,6 +80,7 @@ export const getActiveModelConfiguration = (): ModelConfiguration => {
     api: profile.api,
     reasoning: profile.reasoning,
     imageInput: profile.imageInput,
+    toolCalling: profile.toolCalling,
   }
 }
 

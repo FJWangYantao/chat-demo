@@ -1,5 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { sendGitHubOAuthCompletion } from './githubOAuthCompletion.ts'
+import { isSameOriginAlias, isTrustedRequestOrigin } from './requestOrigin.ts'
 
 export type GitHubOAuthOptions = {
   origin: string
@@ -7,8 +9,47 @@ export type GitHubOAuthOptions = {
   clientSecret: string
 }
 
-type PendingLogin = { verifier: string; expiresAt: number }
-type Session = { token: string; login: string; expiresAt: number }
+type LoginResult =
+  | 'pending'
+  | 'connected'
+  | 'denied'
+  | 'invalid_state'
+  | 'failed'
+  | 'cancelled'
+  | 'expired'
+  | 'unconfigured'
+  | 'network_error'
+  | 'invalid_credentials'
+  | 'code_expired'
+type LoginAttempt = {
+  browser: string
+  privateRepositories: boolean
+  login?: string
+  locale: 'zh-CN' | 'en-US'
+  status: LoginResult
+  state?: string
+  connectionId?: string
+  sessionId?: string
+  expiresAt: number
+}
+type PendingLogin = {
+  verifier: string
+  privateRepositories: boolean
+  expiresAt: number
+  attemptId?: string
+}
+type Connection = {
+  id: string
+  token: string
+  login: string
+  privateRepositories: boolean
+  expiresAt: number
+}
+type Session = {
+  connections: Map<string, Connection>
+  lastConnectedId: string
+  expiresAt: number
+}
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -71,6 +112,8 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
   const secure = origin.protocol === 'https:'
   const sessionCookie = secure ? '__Host-chat-demo-github' : 'chat-demo-github'
   const stateCookie = secure ? '__Host-chat-demo-github-state' : 'chat-demo-github-state'
+  const browserCookie = secure ? '__Host-chat-demo-github-browser' : 'chat-demo-github-browser'
+  const attempts = new Map<string, LoginAttempt>()
   const callback = `${origin.origin}/auth/github/callback`
   const pending = new Map<string, PendingLogin>()
   const sessions = new Map<string, Session>()
@@ -82,6 +125,11 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
   }
   const cleanExpired = () => {
     const now = Date.now()
+    for (const [id, value] of attempts) {
+      if (value.expiresAt <= now) {
+        attempts.delete(id)
+      }
+    }
     for (const [id, value] of pending) {
       if (value.expiresAt <= now) {
         pending.delete(id)
@@ -90,27 +138,24 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
     for (const [id, value] of sessions) {
       if (value.expiresAt <= now) {
         sessions.delete(id)
+      } else {
+        for (const [connectionId, connection] of value.connections) {
+          if (connection.expiresAt <= now) {
+            value.connections.delete(connectionId)
+          }
+        }
       }
     }
   }
-  const sameOrigin = (value: string | undefined) => {
-    try {
-      return (
-        value !== undefined &&
-        new URL(value).origin !== 'null' &&
-        new URL(value).origin === origin.origin
-      )
-    } catch {
-      return false
-    }
-  }
-  const upstream = (url: string, init: RequestInit) =>
+  const sameOrigin = (value: string | undefined) =>
+    value !== undefined && isSameOriginAlias(origin, value)
+  const upstream = (url: string, init: RequestInit, timeout = 30000) =>
     fetch(url, {
       ...init,
       redirect: 'error',
       signal: init.signal
-        ? AbortSignal.any([init.signal, AbortSignal.timeout(30000)])
-        : AbortSignal.timeout(30000),
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(timeout)])
+        : AbortSignal.timeout(timeout),
     })
 
   return (request: IncomingMessage, response: ServerResponse, next: () => void) => {
@@ -131,10 +176,7 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
     response.setHeader('Referrer-Policy', 'no-referrer')
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
-    if (
-      request.headers.host !== origin.host ||
-      (request.headers.origin && !sameOrigin(request.headers.origin))
-    ) {
+    if (!isTrustedRequestOrigin(request, origin)) {
       json(response, 403, { error: 'untrusted_origin' })
       return
     }
@@ -144,9 +186,37 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
     const session = sessions.get(sessionId)
     const requestedState = cookies.get(stateCookie) ?? ''
     const isCallback = url.pathname === '/auth/github/callback'
+    const loginState = isCallback
+      ? (pending.get(url.searchParams.get('state') ?? '') ?? pending.get(requestedState))
+      : undefined
+    const attemptId = isCallback
+      ? loginState?.attemptId
+      : (url.searchParams.get('attempt') ?? undefined)
+    const attempt = attemptId ? attempts.get(attemptId) : undefined
+    const ownedAttempt = attempt?.browser === cookies.get(browserCookie) ? attempt : undefined
+    const complete = (result: Exclude<LoginResult, 'pending'>, connectionId?: string) => {
+      if (ownedAttempt && attemptId) {
+        if (ownedAttempt.status === 'pending') {
+          ownedAttempt.status = result
+          ownedAttempt.connectionId = connectionId
+        }
+      }
+    }
+    const finishCallback = (result: Exclude<LoginResult, 'pending'>, connectionId?: string) => {
+      complete(result, connectionId)
+      if (response.writableEnded) {
+        return
+      }
+      if (ownedAttempt && attemptId) {
+        redirect(response, `/auth/github/complete?attempt=${attemptId}`)
+      } else {
+        redirect(response, `/?github_auth=${result}`)
+      }
+    }
+    let callbackStage = 'token_exchange'
     const controller = new AbortController()
     const onClose = () => {
-      if (!response.writableEnded) {
+      if (!isCallback && !response.writableEnded) {
         controller.abort()
       }
     }
@@ -154,31 +224,77 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
 
     const run = async () => {
       if (request.method === 'GET' && url.pathname === '/auth/github/session') {
-        json(response, 200, { configured, authenticated: Boolean(session), login: session?.login })
+        json(response, 200, {
+          configured,
+          authenticated: Boolean(session?.connections.size),
+          lastConnectedId: session?.lastConnectedId,
+          connections: [...(session?.connections.values() ?? [])].map(
+            ({ id, login, privateRepositories, expiresAt }) => ({
+              id,
+              login,
+              privateRepositories,
+              expiresAt,
+            })
+          ),
+        })
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/auth/github/complete') {
+        if (!ownedAttempt) {
+          json(response, 404, { error: 'invalid_attempt' })
+          return
+        }
+        sendGitHubOAuthCompletion(response, ownedAttempt.locale)
         return
       }
       if (request.method === 'GET' && url.pathname === '/auth/github/login') {
+        if (attemptId && (!ownedAttempt || ownedAttempt.status !== 'pending')) {
+          json(response, 400, { error: 'invalid_attempt' })
+          return
+        }
         if (!configured) {
-          redirect(response, '/?github_auth=unconfigured')
+          finishCallback('unconfigured')
           return
         }
         if (pending.size >= 1000 || sessions.size >= 10000) {
           json(response, 503, { error: 'server_busy' })
           return
         }
+        const previousLogin = pending.get(requestedState)
+        const previousAttempt = previousLogin?.attemptId
+          ? attempts.get(previousLogin.attemptId)
+          : undefined
+        if (previousAttempt?.status === 'pending') {
+          previousAttempt.status = 'cancelled'
+        }
         pending.delete(requestedState)
         const state = randomBytes(32).toString('base64url')
         const verifier = randomBytes(32).toString('base64url')
-        pending.set(state, { verifier, expiresAt: Date.now() + 600000 })
+        const privateRepositories =
+          ownedAttempt?.privateRepositories ?? url.searchParams.get('private') === '1'
+        pending.set(state, {
+          verifier,
+          privateRepositories,
+          expiresAt: Date.now() + 600000,
+          attemptId,
+        })
+        if (ownedAttempt) {
+          ownedAttempt.state = state
+        }
         response.setHeader('Set-Cookie', cookie(stateCookie, state, 600))
         const authorize = new URL('https://github.com/login/oauth/authorize')
         authorize.searchParams.set('client_id', clientId)
         authorize.searchParams.set('redirect_uri', callback)
         authorize.searchParams.set(
           'scope',
-          url.searchParams.get('private') === '1' ? 'read:user repo' : 'read:user public_repo'
+          privateRepositories ? 'read:user repo' : 'read:user public_repo'
         )
         authorize.searchParams.set('state', state)
+        authorize.searchParams.set('prompt', 'select_account')
+        const loginHint = ownedAttempt?.login ?? url.searchParams.get('login')
+        if (loginHint && /^[a-zA-Z0-9-]+$/.test(loginHint)) {
+          authorize.searchParams.set('login', loginHint)
+        }
         authorize.searchParams.set(
           'code_challenge',
           createHash('sha256').update(verifier).digest('base64url')
@@ -200,34 +316,47 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
             new TextEncoder().encode(requestedState)
           )
         ) {
-          redirect(response, '/?github_auth=invalid_state')
+          finishCallback('invalid_state')
           return
         }
         pending.delete(state)
         response.setHeader('Set-Cookie', cookie(stateCookie, '', 0))
         if (url.searchParams.has('error')) {
-          redirect(response, '/?github_auth=denied')
+          finishCallback('denied')
+          return
+        }
+        if (ownedAttempt && ownedAttempt.status !== 'pending') {
+          finishCallback(ownedAttempt.status)
           return
         }
         const code = url.searchParams.get('code')
         if (!code || code.length > 512) {
-          redirect(response, '/?github_auth=failed')
+          finishCallback('failed')
           return
         }
-        const tokenResponse = await upstream('https://github.com/login/oauth/access_token', {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/x-www-form-urlencoded',
+        if (ownedAttempt && attemptId) {
+          redirect(response, `/auth/github/complete?attempt=${attemptId}`)
+        } else {
+          redirect(response, '/?github_auth=pending')
+        }
+        const tokenResponse = await upstream(
+          'https://github.com/login/oauth/access_token',
+          {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              client_id: clientId,
+              client_secret: clientSecret,
+              code,
+              redirect_uri: callback,
+              code_verifier: login.verifier,
+            }).toString(),
           },
-          body: new URLSearchParams({
-            client_id: clientId,
-            client_secret: clientSecret,
-            code,
-            redirect_uri: callback,
-            code_verifier: login.verifier,
-          }).toString(),
-        })
+          ownedAttempt ? ownedAttempt.expiresAt - Date.now() : 30000
+        )
         const token: unknown = await tokenResponse.json()
         if (
           !tokenResponse.ok ||
@@ -237,16 +366,33 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
           token.token_type !== 'bearer' ||
           token.error
         ) {
-          redirect(response, '/?github_auth=failed')
+          const code = isRecord(token) && typeof token.error === 'string' ? token.error : ''
+          const result =
+            code === 'incorrect_client_credentials' ||
+            code === 'invalid_client' ||
+            tokenResponse.status === 404
+              ? 'invalid_credentials'
+              : code === 'bad_verification_code'
+                ? 'code_expired'
+                : 'failed'
+          process.stderr.write(
+            `[GitHub OAuth] token_exchange failed: ${result}, HTTP ${tokenResponse.status}\n`
+          )
+          finishCallback(result)
           return
         }
-        const userResponse = await upstream('https://api.github.com/user', {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            Authorization: `Bearer ${token.access_token}`,
-            'X-GitHub-Api-Version': '2022-11-28',
+        callbackStage = 'user_profile'
+        const userResponse = await upstream(
+          'https://api.github.com/user',
+          {
+            headers: {
+              Accept: 'application/vnd.github+json',
+              Authorization: `Bearer ${token.access_token}`,
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
           },
-        })
+          ownedAttempt ? ownedAttempt.expiresAt - Date.now() : 30000
+        )
         const user: unknown = await userResponse.json()
         if (
           !userResponse.ok ||
@@ -254,7 +400,14 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
           typeof user.login !== 'string' ||
           !/^[a-zA-Z0-9-]+$/.test(user.login)
         ) {
-          redirect(response, '/?github_auth=failed')
+          finishCallback('failed')
+          return
+        }
+        if (
+          ownedAttempt &&
+          (ownedAttempt.status !== 'pending' || ownedAttempt.expiresAt <= Date.now())
+        ) {
+          finishCallback(ownedAttempt.status === 'pending' ? 'expired' : ownedAttempt.status)
           return
         }
         const id = randomBytes(32).toString('base64url')
@@ -264,17 +417,39 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
           token.expires_in > 0
             ? Math.min(28800, Math.floor(token.expires_in))
             : 28800
-        sessions.delete(sessionId)
-        sessions.set(id, {
+        const connections = new Map(session?.connections)
+        for (const [connectionId, connection] of connections) {
+          if (connection.login.toLowerCase() === user.login.toLowerCase()) {
+            connections.delete(connectionId)
+          }
+        }
+        const connectionId = randomBytes(24).toString('base64url')
+        connections.set(connectionId, {
+          id: connectionId,
           token: token.access_token,
           login: user.login,
+          privateRepositories:
+            typeof token.scope === 'string'
+              ? token.scope.split(/[ ,]+/).includes('repo')
+              : login.privateRepositories,
           expiresAt: Date.now() + age * 1000,
         })
-        response.setHeader('Set-Cookie', [
-          cookie(stateCookie, '', 0),
-          cookie(sessionCookie, id, age),
-        ])
-        redirect(response, '/?github_auth=connected')
+        sessions.delete(sessionId)
+        sessions.set(id, {
+          connections,
+          lastConnectedId: connectionId,
+          expiresAt: Date.now() + 28800000,
+        })
+        if (!ownedAttempt) {
+          response.setHeader('Set-Cookie', [
+            cookie(stateCookie, '', 0),
+            cookie(sessionCookie, id, 28800),
+          ])
+        }
+        if (ownedAttempt) {
+          ownedAttempt.sessionId = id
+        }
+        finishCallback('connected', connectionId)
         return
       }
       if (
@@ -284,18 +459,108 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
         json(response, 403, { error: 'untrusted_request' })
         return
       }
+      if (url.pathname === '/auth/github/attempt') {
+        if (request.method === 'POST') {
+          if (!configured || attempts.size >= 1000) {
+            json(response, configured ? 503 : 400, {
+              error: configured ? 'server_busy' : 'unconfigured',
+            })
+            return
+          }
+          const input = await readBody(request)
+          if (
+            !isRecord(input) ||
+            typeof input.privateRepositories !== 'boolean' ||
+            (input.login !== undefined &&
+              (typeof input.login !== 'string' || !/^[a-zA-Z0-9-]+$/.test(input.login)))
+          ) {
+            json(response, 400, { error: 'invalid_attempt' })
+            return
+          }
+          const browser = cookies.get(browserCookie) ?? randomBytes(32).toString('base64url')
+          const id = randomBytes(24).toString('base64url')
+          attempts.set(id, {
+            browser,
+            privateRepositories: input.privateRepositories,
+            login: typeof input.login === 'string' ? input.login : undefined,
+            locale: input.locale === 'en-US' ? 'en-US' : 'zh-CN',
+            status: 'pending',
+            expiresAt: Date.now() + 600000,
+          })
+          response.setHeader('Set-Cookie', cookie(browserCookie, browser, 28800))
+          json(response, 200, { id, loginUrl: `/auth/github/login?attempt=${id}` })
+          return
+        }
+        if (request.method === 'GET') {
+          if (!ownedAttempt) {
+            json(response, 404, { error: 'invalid_attempt' })
+            return
+          }
+          if (ownedAttempt.status === 'connected') {
+            const completedId = ownedAttempt.sessionId
+            const completedSession = completedId ? sessions.get(completedId) : undefined
+            if (
+              !completedId ||
+              !ownedAttempt.connectionId ||
+              !completedSession?.connections.has(ownedAttempt.connectionId)
+            ) {
+              json(response, 200, { status: 'expired' })
+              return
+            }
+            if (sessionId !== completedId) {
+              response.setHeader(
+                'Set-Cookie',
+                cookie(
+                  sessionCookie,
+                  completedId,
+                  Math.max(1, Math.floor((completedSession.expiresAt - Date.now()) / 1000))
+                )
+              )
+            }
+          }
+          json(response, 200, {
+            status: ownedAttempt.status,
+            connectionId: ownedAttempt.connectionId,
+          })
+          return
+        }
+      }
+      if (request.method === 'POST' && url.pathname === '/auth/github/cancel') {
+        if (!ownedAttempt) {
+          json(response, 404, { error: 'invalid_attempt' })
+          return
+        }
+        if (ownedAttempt.status === 'pending') {
+          ownedAttempt.status = 'cancelled'
+        }
+        json(response, 200, { status: ownedAttempt.status })
+        return
+      }
+      const connectionId = request.headers['x-github-connection']
+      const connection =
+        typeof connectionId === 'string' ? session?.connections.get(connectionId) : undefined
       if (request.method === 'POST' && url.pathname === '/auth/github/logout') {
-        sessions.delete(sessionId)
-        pending.delete(requestedState)
-        response.setHeader('Set-Cookie', [cookie(sessionCookie, '', 0), cookie(stateCookie, '', 0)])
-        json(response, 200, { authenticated: false })
+        if (typeof connectionId !== 'string' || !/^[a-zA-Z0-9_-]{32}$/.test(connectionId)) {
+          json(response, 400, { error: 'invalid_connection' })
+          return
+        }
+        session?.connections.delete(connectionId)
+        if (!session?.connections.size) {
+          sessions.delete(sessionId)
+          pending.delete(requestedState)
+          response.setHeader('Set-Cookie', [
+            cookie(sessionCookie, '', 0),
+            cookie(stateCookie, '', 0),
+          ])
+        }
+        json(response, 200, { authenticated: Boolean(session?.connections.size) })
         return
       }
       if (!proxy || !['GET', 'POST'].includes(request.method ?? '')) {
         json(response, 404, { error: 'not_found' })
         return
       }
-      if (!session) {
+      if (!connection) {
         json(response, 401, { error: 'not_authenticated' })
         return
       }
@@ -331,7 +596,7 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
         method: request.method,
         headers: {
           Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${session.token}`,
+          Authorization: `Bearer ${connection.token}`,
           'X-GitHub-Api-Version': '2022-11-28',
           ...(body ? { 'Content-Type': 'application/json' } : {}),
         },
@@ -339,29 +604,41 @@ export const createGitHubOAuthMiddleware = (options: Partial<GitHubOAuthOptions>
         signal: controller.signal,
       })
       if (upstreamResponse.status === 401) {
-        sessions.delete(sessionId)
-        response.setHeader('Set-Cookie', cookie(sessionCookie, '', 0))
+        session?.connections.delete(connection.id)
       }
       const result: unknown = await upstreamResponse.json()
       json(response, upstreamResponse.status, result)
     }
     void run()
       .catch((error: unknown) => {
-        if (response.destroyed || response.writableEnded) {
-          return
-        }
         if (isCallback) {
-          redirect(response, '/?github_auth=failed')
+          const networkError =
+            error instanceof TypeError ||
+            (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name))
+          const result = networkError
+            ? ownedAttempt && ownedAttempt.expiresAt <= Date.now()
+              ? 'expired'
+              : 'network_error'
+            : 'failed'
+          process.stderr.write(`[GitHub OAuth] ${callbackStage} failed: ${result}\n`)
+          finishCallback(result)
         } else {
-          json(
-            response,
-            error instanceof Error && error.message === 'body_limit'
-              ? 413
-              : error instanceof Error && error.message === 'invalid_json'
-                ? 400
-                : 502,
-            { error: 'github_request_failed' }
-          )
+          if (response.writableEnded) {
+            return
+          }
+          if (response.headersSent) {
+            response.end()
+          } else {
+            json(
+              response,
+              error instanceof Error && error.message === 'body_limit'
+                ? 413
+                : error instanceof Error && error.message === 'invalid_json'
+                  ? 400
+                  : 502,
+              { error: 'github_request_failed' }
+            )
+          }
         }
       })
       .finally(() => response.off('close', onClose))

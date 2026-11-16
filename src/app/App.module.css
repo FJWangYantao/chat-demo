@@ -52,6 +52,14 @@
   text-align: center;
 }
 
+.errorIllustration {
+  display: block;
+  width: 160px;
+  height: 160px;
+  object-fit: contain;
+  user-select: none;
+}
+
 @media not all and (min-width: 768px) {
   .frame {
     position: fixed;

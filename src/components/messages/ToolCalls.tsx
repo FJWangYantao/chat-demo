@@ -5,6 +5,7 @@ import { approveToolCall } from '../../services/apps/approvals.js'
 import type { ToolCallPart } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
 import { IconChevronRightOutline14 } from '../base/icons.js'
+import { VrmStateIcon } from '../vrm/VrmStateIcon.js'
 import styles from './ToolCalls.module.css'
 
 const labels: Record<string, TranslationKey> = {
@@ -95,6 +96,9 @@ export const ToolCallContent = memo(function ToolCallContent({
           )}
           title={t('appToolDetails')}
         >
+          {call.status === 'done' ? (
+            <VrmStateIcon state="done" className={styles.doneIcon} />
+          ) : null}
           <span className={styles.label}>{label}</span>
           <span className={styles.chevron} aria-hidden="true">
             <IconChevronRightOutline14 />
@@ -131,6 +135,7 @@ export const ToolCallContent = memo(function ToolCallContent({
       </details>
       {waiting ? (
         <div className={styles.approval}>
+          <VrmStateIcon state="waiting" className={styles.waitingIcon} />
           <p>{t('appToolApprovalDescription')}</p>
           <dl>
             <dt>{t('appToolRepository')}</dt>

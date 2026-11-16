@@ -1,238 +1,9 @@
-import { create } from 'zustand'
 import { translate } from '../../i18n/index.js'
 import type { ClientTool } from '../api/types.js'
-import { cancelToolApprovals } from './approvals.js'
-
-const STORAGE_KEY = 'chat-demo:github'
-const API_ORIGIN = 'https://api.github.com'
-
-type Connection =
-  | { token: string; login: string; auth?: 'token' }
-  | { token: null; login: string; auth: 'oauth' }
-
-const readConnection = (): Connection | null => {
-  try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? 'null')
-    if (
-      isRecord(value) &&
-      typeof value.token === 'string' &&
-      value.token.trim() &&
-      typeof value.login === 'string' &&
-      /^[a-zA-Z0-9-]+$/.test(value.login)
-    ) {
-      return { token: value.token, login: value.login }
-    }
-  } catch {
-    return null
-  }
-  return null
-}
+import { getGitHubConnection, githubRequest } from './githubConnection.js'
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
-
-export const useGitHub = create<{
-  connection: Connection | null
-  oauthConfigured: boolean
-  oauthLoading: boolean
-  oauthError: string
-  disconnecting: boolean
-}>(() => ({
-  connection: readConnection(),
-  oauthConfigured: false,
-  oauthLoading: false,
-  oauthError: '',
-  disconnecting: false,
-}))
-
-const setConnection = (connection: Connection | null) => {
-  try {
-    if (connection?.token) {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(connection))
-    } else {
-      sessionStorage.removeItem(STORAGE_KEY)
-    }
-  } catch {
-    // 存储不可用时，连接仅在本次页面内生效。
-  }
-  useGitHub.setState({ connection })
-}
-
-const activeRequests = new Set<AbortController>()
-
-const sessionRequest = async (path: string, method = 'GET') => {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10000)
-  try {
-    return await fetch(path, {
-      method,
-      credentials: 'same-origin',
-      headers: { 'X-Chat-Demo-Request': '1' },
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-export const restoreGitHubSession = async (authResult: string | null = null) => {
-  if (!['http:', 'https:'].includes(window.location.protocol)) {
-    return
-  }
-  useGitHub.setState({ oauthLoading: true, oauthError: '' })
-  try {
-    const response = await sessionRequest('/auth/github/session')
-    if (!response.ok || !response.headers.get('Content-Type')?.includes('application/json')) {
-      if (authResult) {
-        useGitHub.setState({ oauthError: translate('githubOAuthFailed') })
-      }
-      return
-    }
-    const status: unknown = await response.json()
-    if (!isRecord(status)) {
-      return
-    }
-    useGitHub.setState({ oauthConfigured: status.configured === true })
-    if (
-      status.authenticated === true &&
-      typeof status.login === 'string' &&
-      /^[a-zA-Z0-9-]+$/.test(status.login)
-    ) {
-      if (
-        !useGitHub.getState().connection ||
-        useGitHub.getState().connection?.auth === 'oauth' ||
-        authResult === 'connected'
-      ) {
-        setConnection({ token: null, login: status.login, auth: 'oauth' })
-      }
-    } else if (useGitHub.getState().connection?.auth === 'oauth') {
-      setConnection(null)
-    }
-    if (authResult && authResult !== 'connected') {
-      const key =
-        authResult === 'denied'
-          ? 'githubOAuthDenied'
-          : authResult === 'invalid_state'
-            ? 'githubOAuthInvalidState'
-            : authResult === 'unconfigured'
-              ? 'githubOAuthUnconfigured'
-              : 'githubOAuthFailed'
-      useGitHub.setState({ oauthError: translate(key) })
-    } else if (authResult === 'connected' && status.authenticated !== true) {
-      useGitHub.setState({ oauthError: translate('githubOAuthFailed') })
-    }
-  } catch {
-    if (authResult) {
-      useGitHub.setState({ oauthError: translate('githubOAuthFailed') })
-    }
-  } finally {
-    useGitHub.setState({ oauthLoading: false })
-  }
-}
-
-export const startGitHubLogin = (privateRepositories: boolean) => {
-  window.location.assign(`/auth/github/login${privateRepositories ? '?private=1' : ''}`)
-}
-
-export const disconnectGitHub = async () => {
-  if (useGitHub.getState().disconnecting) {
-    return
-  }
-  cancelToolApprovals()
-  for (const controller of activeRequests) {
-    controller.abort()
-  }
-  useGitHub.setState({ disconnecting: true, oauthError: '' })
-  try {
-    if (useGitHub.getState().connection?.auth === 'oauth' || useGitHub.getState().oauthConfigured) {
-      const response = await sessionRequest('/auth/github/logout', 'POST')
-      if (!response.ok) {
-        throw new Error('logout_failed')
-      }
-    }
-    setConnection(null)
-  } catch {
-    useGitHub.setState({ oauthError: translate('githubOAuthLogoutFailed') })
-  } finally {
-    useGitHub.setState({ disconnecting: false })
-  }
-}
-
-const githubRequest = async (
-  token: string | null,
-  path: string,
-  signal: AbortSignal,
-  body?: unknown
-): Promise<unknown> => {
-  signal.throwIfAborted()
-  const controller = new AbortController()
-  const abort = () => controller.abort(signal.reason)
-  signal.addEventListener('abort', abort, { once: true })
-  activeRequests.add(controller)
-  const timeout = setTimeout(() => controller.abort(), 30000)
-  try {
-    const response = await fetch(token === null ? `/api/github${path}` : `${API_ORIGIN}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        ...(token === null
-          ? { 'X-Chat-Demo-Request': '1' }
-          : { Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' }),
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      credentials: token === null ? 'same-origin' : 'omit',
-      redirect: 'error',
-      signal: controller.signal,
-    })
-    if (!response.ok) {
-      if (token === null && response.status === 401) {
-        setConnection(null)
-        cancelToolApprovals()
-        useGitHub.setState({ oauthError: translate('githubOAuthExpired') })
-      }
-      const key =
-        response.status === 401
-          ? token === null
-            ? 'githubOAuthExpired'
-            : 'githubUnauthorized'
-          : response.status === 403 || response.status === 429
-            ? 'githubForbidden'
-            : response.status === 404
-              ? 'githubNotFound'
-              : 'githubRequestFailed'
-      throw new Error(translate(key, { status: response.status }))
-    }
-    return await response.json()
-  } catch (error) {
-    signal.throwIfAborted()
-    if (controller.signal.aborted || (body !== undefined && error instanceof TypeError)) {
-      throw new Error(translate('githubInterrupted'))
-    }
-    if (error instanceof TypeError) {
-      throw new Error(translate('githubNetworkError'))
-    }
-    throw error
-  } finally {
-    clearTimeout(timeout)
-    signal.removeEventListener('abort', abort)
-    activeRequests.delete(controller)
-  }
-}
-
-export const connectGitHub = async (value: string, signal: AbortSignal) => {
-  const token = value.trim()
-  if (!token || /\s/.test(token)) {
-    throw new Error(translate('githubInvalidToken'))
-  }
-  const user = await githubRequest(token, '/user', signal)
-  signal.throwIfAborted()
-  if (!isRecord(user) || typeof user.login !== 'string' || !/^[a-zA-Z0-9-]+$/.test(user.login)) {
-    throw new Error(translate('githubInvalidResponse'))
-  }
-  setConnection({ token, login: user.login })
-  useGitHub.setState({ oauthError: '' })
-}
 
 const repositoryProperties = {
   owner: { type: 'string', description: 'GitHub repository owner or organization.' },
@@ -302,8 +73,7 @@ const TOOLS: ClientTool[] = [
 ]
 
 export const getGitHubTools = (): ClientTool[] => {
-  const { connection, disconnecting } = useGitHub.getState()
-  return connection && !disconnecting ? TOOLS : []
+  return getGitHubConnection() ? TOOLS : []
 }
 
 export const isGitHubWriteTool = (name: string) => name === 'github_create_issue'
@@ -401,15 +171,15 @@ export const executeGitHubCall = async (
   approved = false
 ): Promise<string> => {
   const input = validateGitHubCall(name, value)
-  const connection = useGitHub.getState().connection
-  if (!connection || useGitHub.getState().disconnecting) {
+  const connection = getGitHubConnection()
+  if (!connection) {
     throw new Error(translate('githubDisconnected'))
   }
   if (isGitHubWriteTool(name) && !approved) {
     throw new Error(translate('githubApprovalRequired'))
   }
   const request = (path: string, body?: unknown) =>
-    githubRequest(connection.token, path, signal, body)
+    githubRequest(connection.token, path, signal, body, connection.id)
   const base = `/repos/${encodeURIComponent(String(input.owner))}/${encodeURIComponent(String(input.repo))}`
   let result: unknown
   switch (name) {

@@ -7,7 +7,13 @@ import { inlineProviderFiles } from '../api/piFiles.js'
 import type { MessageParam, MessageStreamEvent } from '../api/types.js'
 import type { ModelConfiguration } from '../api/providerTypes.js'
 import { getGitHubTools } from '../apps/github.js'
-import { TOOL_CALL_LIMIT, TOOL_ROUND_LIMIT, runClientTools } from '../apps/clientTools.js'
+import {
+  TOOL_CALL_LIMIT,
+  TOOL_ROUND_LIMIT,
+  runClientTools,
+  type SearchExecutionContext,
+} from '../apps/clientTools.js'
+import { getSearchTools, isSearchTool } from '../search/tools.js'
 import type { ToolCallPart } from './types.js'
 
 type AgentOptions = {
@@ -22,26 +28,35 @@ type AgentOptions = {
   emit: (event: MessageStreamEvent) => void
   onMessage: (message: PiMessage) => void
   onTool: (call: ToolCallPart) => void
+  searchContext: SearchExecutionContext
 }
+
+export const createPiModel = (configuration: ModelConfiguration): Model<Api> => ({
+  id: configuration.model,
+  name: configuration.model,
+  provider: configuration.provider,
+  api: configuration.api,
+  baseUrl: configuration.baseUrl,
+  reasoning: configuration.reasoning,
+  input: configuration.imageInput ? ['text', 'image'] : ['text'],
+  contextWindow: 128000,
+  maxTokens: 16384,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+})
 
 export const runPiAgent = async (options: AgentOptions): Promise<void> => {
   const { configuration, signal, emit } = options
-  const model: Model<Api> = {
-    id: configuration.model,
-    name: configuration.model,
-    provider: configuration.provider,
-    api: configuration.api,
-    baseUrl: configuration.baseUrl,
-    reasoning: configuration.reasoning,
-    input: configuration.imageInput ? ['text', 'image'] : ['text'],
-    contextWindow: 128000,
-    maxTokens: 16384,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  }
+  const model = createPiModel(configuration)
   const messages = await inlineProviderFiles(options.messages, signal)
   signal.throwIfAborted()
   const context = toPiContext(messages, options.system, model)
-  const definitions = getGitHubTools()
+  const definitions =
+    configuration.toolCalling === false
+      ? []
+      : [
+          ...getGitHubTools(),
+          ...(options.searchContext.config?.mode === 'agent' ? getSearchTools() : []),
+        ]
   let calls: ToolCallPart[] = []
   let batch: Promise<void> | undefined
   let totalCalls = 0
@@ -58,10 +73,17 @@ export const runPiAgent = async (options: AgentOptions): Promise<void> => {
       if (failure) {
         throw failure
       }
-      batch ??= runClientTools(calls, options.sessionId, options.messageId, signal, (call) => {
-        toolResults.set(call.id, call)
-        options.onTool(call)
-      })
+      batch ??= runClientTools(
+        calls,
+        options.sessionId,
+        options.messageId,
+        signal,
+        (call) => {
+          toolResults.set(call.id, call)
+          options.onTool(call)
+        },
+        options.searchContext
+      )
       await batch
       signal.throwIfAborted()
       const result = toolResults.get(id)?.result
@@ -180,7 +202,7 @@ export const runPiAgent = async (options: AgentOptions): Promise<void> => {
       )
       if (calls.length > 0) {
         rounds += 1
-        totalCalls += calls.length
+        totalCalls += calls.filter((call) => !isSearchTool(call.name)).length
         if (rounds > TOOL_ROUND_LIMIT || totalCalls > TOOL_CALL_LIMIT) {
           failure = new Error(translate('appToolRoundLimit'))
         }

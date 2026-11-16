@@ -7,7 +7,7 @@ export type Locale = 'zh-CN' | 'en-US'
 /** 主题偏好；默认跟随系统 */
 export type ThemePreference = 'light' | 'dark' | 'system'
 
-/** 本机设置，存 localStorage：DeepSeek API Key、语言、主题、位置、朗读音色、深度思考与智能搜索开关、侧边栏收起状态 */
+/** 本机设置，存 localStorage：DeepSeek API Key、语言、主题、位置、朗读音色、功能开关与侧边栏状态 */
 type Settings = {
   apiKey: string | null
   locale: Locale
@@ -16,6 +16,7 @@ type Settings = {
   ttsVoice: TtsVoice
   thinking: boolean
   search: boolean
+  autoTitle: boolean
   siderCollapsed: boolean
 }
 
@@ -27,6 +28,7 @@ const KEYS = {
   ttsVoice: 'chat-demo:tts-voice',
   thinking: 'chat-demo:thinking',
   search: 'chat-demo:search',
+  autoTitle: 'chat-demo:auto-title',
   siderCollapsed: 'chat-demo:sider-collapsed',
 } as const
 
@@ -95,6 +97,7 @@ export const useSettings = create<Settings>(() => ({
   ttsVoice: initialTtsVoice(),
   thinking: read(KEYS.thinking) === 'true',
   search: read(KEYS.search) === 'true',
+  autoTitle: read(KEYS.autoTitle) !== 'false',
   siderCollapsed: read(KEYS.siderCollapsed) === 'true',
 }))
 
@@ -132,6 +135,11 @@ export const setThinking = (thinking: boolean) => {
 export const setSearch = (search: boolean) => {
   write(KEYS.search, String(search))
   useSettings.setState({ search })
+}
+
+export const setAutoTitle = (autoTitle: boolean) => {
+  write(KEYS.autoTitle, String(autoTitle))
+  useSettings.setState({ autoTitle })
 }
 
 export const setSiderCollapsed = (siderCollapsed: boolean) => {

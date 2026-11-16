@@ -1,7 +1,15 @@
 import type { ServerToolUseBlock } from '../../api/types.js'
 import { getVisibleMessages, normalizeSession } from '../branches.js'
 import { describeReply } from '../describe.js'
-import type { AssistantMessage, Message, ReplyBlock, Session, UserMessage } from '../types.js'
+import type {
+  AssistantMessage,
+  Message,
+  ReplyBlock,
+  Session,
+  ToolCallPart,
+  UserMessage,
+} from '../types.js'
+import { parseSearchToolPayload } from '../../search/sources.js'
 import { fail } from './errors.js'
 import type {
   ChatMessage,
@@ -116,10 +124,52 @@ const toolFragment = (tool: ServerToolUseBlock, result: ReplyBlock | undefined):
   ]
 }
 
+const clientToolFragment = (call: ToolCallPart): Fragment[] => {
+  if (call.name !== 'web_search' && call.name !== 'web_fetch') {
+    return []
+  }
+  const payload = call.result ? parseSearchToolPayload(call.result.content) : null
+  const status = !call.result ? 'WIP' : call.result.is_error || !payload ? 'FAILED' : 'FINISHED'
+  const input =
+    typeof call.input === 'object' && call.input !== null && !Array.isArray(call.input)
+      ? (call.input as Record<string, unknown>)
+      : {}
+  if (call.name === 'web_search') {
+    return [
+      {
+        type: 'TOOL_SEARCH',
+        queries: [typeof input.query === 'string' ? input.query : ''],
+        status,
+        results: (payload?.sources ?? []).map((source) => ({
+          url: source.url,
+          title: source.title,
+          snippet: source.snippet,
+          published_at: isoOrNull(source.publishedAt),
+          site_name: source.siteName,
+          site_icon: source.siteIcon,
+        })),
+      },
+    ]
+  }
+  const source = payload?.sources[0]
+  const url = source?.url ?? (typeof input.url === 'string' ? input.url : null)
+  return [
+    {
+      type: 'TOOL_OPEN',
+      status,
+      url,
+      title: source?.title ?? null,
+      snippet: source?.snippet ?? null,
+      site_name: source?.siteName ?? null,
+      published_at: isoOrNull(source?.publishedAt ?? null),
+    },
+  ]
+}
+
 /**
  * 内容块按顺序转换为片段：相邻同类正文合并，服务端模板保留 TEMPLATE_RESPONSE；
  * 引用改由正文外的来源表示，不写入标记；
- * 本轮调用过联网能力时，剥除模型原样输出的 [citation:N]。
+ * 本轮调用过联网能力时，剥除模型原样输出的 [citation:N] 与独立搜索 [S编号]。
  */
 const assistantFragments = (message: AssistantMessage): Fragment[] => {
   const { blocks } = message
@@ -129,7 +179,11 @@ const assistantFragments = (message: AssistantMessage): Fragment[] => {
       results.set(block.tool_use_id, block)
     }
   }
-  const usedWeb = blocks.some((block) => block.type === 'server_tool_use')
+  const usedWeb = blocks.some(
+    (block) =>
+      block.type === 'server_tool_use' ||
+      (block.type === 'tool_use' && ['web_search', 'web_fetch'].includes(block.name))
+  )
   const fragments: Fragment[] = []
   let response: { type: 'RESPONSE' | 'TEMPLATE_RESPONSE'; content: string } | undefined
   for (const block of blocks) {
@@ -139,7 +193,9 @@ const assistantFragments = (message: AssistantMessage): Fragment[] => {
         response = { type, content: '' }
         fragments.push(response)
       }
-      response.content += usedWeb ? block.text.replace(/\[citation:\d+\]/g, '') : block.text
+      response.content += usedWeb
+        ? block.text.replace(/\[citation:\d+\]|\[S[1-9]\d*\]/g, '')
+        : block.text
       continue
     }
     const converted: Fragment[] =
@@ -159,7 +215,9 @@ const assistantFragments = (message: AssistantMessage): Fragment[] => {
           : []
         : block.type === 'server_tool_use'
           ? toolFragment(block, results.get(block.id))
-          : []
+          : block.type === 'tool_use'
+            ? clientToolFragment(block)
+            : []
     if (converted.length > 0) {
       fragments.push(...converted)
       response = undefined

@@ -7,6 +7,8 @@ import type {
   WebSearchToolResultBlock,
 } from '../api/types.js'
 import type { AssistantMessage, ThinkingPart, ToolCallPart } from './types.js'
+import { parseSearchToolPayload } from '../search/sources.js'
+import type { SearchSource } from '../search/types.js'
 
 /**
  * 由回复的内容块推导界面需要的结构：思考与工具步骤的时间线、带引用角标的正文、可引用的来源列表。
@@ -43,6 +45,7 @@ export type SearchStep = {
   queries: string[]
   results: Source[]
   status: ToolStatus
+  error?: string
 }
 
 export type PageItem = {
@@ -50,6 +53,7 @@ export type PageItem = {
   url: string
   title: string
   status: ToolStatus
+  error?: string
 }
 
 export type OpenStep = { type: 'open'; pages: PageItem[] }
@@ -113,10 +117,53 @@ const getStatus = (
 const mergeStatus = (statuses: ToolStatus[]): ToolStatus =>
   statuses.includes('wip') ? 'wip' : statuses.every((s) => s === 'failed') ? 'failed' : 'done'
 
+const getClientStatus = (call: ToolCallPart, streaming: boolean): ToolStatus =>
+  !call.result ? (streaming ? 'wip' : 'failed') : call.result.is_error ? 'failed' : 'done'
+
 /** 来源登记：同一 URL 只编号一次，编号按首次出现的顺序 */
 class SourceRegistry {
   readonly list: Source[] = []
   private byUrl = new Map<string, Source>()
+  private externalIds = new Set<string>()
+
+  addExternal(value: SearchSource): Source | null {
+    const index = Number(value.id.slice(1))
+    if (this.list.some((source) => source.index === index && source.url !== value.url)) {
+      return null
+    }
+    const existing = this.byUrl.get(value.url)
+    if (existing) {
+      this.externalIds.add(value.id)
+      if (existing.title === value.url && value.title) {
+        existing.title = value.title
+      }
+      existing.siteName = value.siteName || existing.siteName
+      existing.publishedAt ||= value.publishedAt
+      existing.snippet ||= value.snippet || null
+      existing.siteIcon ||= value.siteIcon
+      return existing
+    }
+    const source: Source = {
+      url: value.url,
+      title: value.title || value.url,
+      siteName: value.siteName || getSiteName(value.url),
+      publishedAt: value.publishedAt,
+      snippet: value.snippet || null,
+      siteIcon: value.siteIcon,
+      index,
+    }
+    this.externalIds.add(value.id)
+    this.list.push(source)
+    this.list.sort((a, b) => a.index - b.index)
+    this.byUrl.set(value.url, source)
+    return source
+  }
+
+  external(id: string) {
+    return this.externalIds.has(id)
+      ? this.list.find((source) => source.index === Number(id.slice(1)))
+      : undefined
+  }
 
   add(
     url: string,
@@ -160,6 +207,12 @@ class SourceRegistry {
  * 文本块拼成一份 markdown：服务端在挂过引用的块之后另起新块，引用位置即块尾。
  * 引用之后的空白（含换行）仍留在被引用的块里，所以 [citation:N] 插在块尾空白之前。
  */
+const externalCitations = (value: string, registry: SourceRegistry, markdown: boolean) =>
+  value.replace(/\[S[1-9]\d*\]/g, (marker) => {
+    const source = registry.external(marker.slice(1, -1))
+    return source ? (markdown ? `[citation:${source.index}]` : '') : marker
+  })
+
 const joinTextBlocks = (
   blocks: { text: string; citations?: TextCitation[] }[],
   registry: SourceRegistry
@@ -167,17 +220,18 @@ const joinTextBlocks = (
   let markdown = ''
   let text = ''
   for (const block of blocks) {
-    text += block.text
+    text += externalCitations(block.text, registry, false)
     const indexes = new Set<number>()
     for (const citation of block.citations ?? []) {
       indexes.add(registry.add(citation.url, citation.title, null).index)
     }
-    const body = indexes.size > 0 ? block.text.trimEnd() : block.text
+    const value = externalCitations(block.text, registry, true)
+    const body = indexes.size > 0 ? value.trimEnd() : value
     markdown += body
     for (const index of indexes) {
       markdown += `[citation:${index}]`
     }
-    markdown += block.text.slice(body.length)
+    markdown += indexes.size > 0 ? value.slice(body.length) : ''
   }
   return { markdown, text }
 }
@@ -199,6 +253,20 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
 
   // 来源编号按搜索结果、打开的网页在回复中出现的顺序，与正文引用无关
   for (const block of reply.blocks) {
+    if (
+      block.type === 'tool_use' &&
+      (block.name === 'web_search' || block.name === 'web_fetch') &&
+      block.result
+    ) {
+      const payload = parseSearchToolPayload(block.result.content)
+      for (const item of payload?.sources ?? []) {
+        const source = registry.addExternal(item)
+        if (source && payload?.type === 'web_search' && !searchResults.includes(source)) {
+          searchResults.push(source)
+        }
+      }
+      continue
+    }
     if (block.type !== 'server_tool_use') {
       continue
     }
@@ -257,6 +325,63 @@ export const buildReplyView = (reply: AssistantMessage, streaming: boolean): Rep
     }
     if (block.type === 'tool_use') {
       flushPreamble()
+      if (block.name === 'web_search' || block.name === 'web_fetch') {
+        const payload = block.result ? parseSearchToolPayload(block.result.content) : null
+        const found = (payload?.sources ?? []).flatMap((item) => {
+          const source = registry.addExternal(item)
+          return source ? [source] : []
+        })
+        const status = getClientStatus(block, streaming)
+        const input =
+          typeof block.input === 'object' && block.input !== null && !Array.isArray(block.input)
+            ? (block.input as Record<string, unknown>)
+            : {}
+        if (block.name === 'web_search') {
+          const query = typeof input.query === 'string' ? input.query : ''
+          const target = mergedSearch.get('search')
+          if (target) {
+            target.queries.push(query)
+            target.results.push(...found.filter((source) => !target.results.includes(source)))
+            target.status = mergeStatus([target.status, status])
+            if (status === 'failed' && block.result?.content) {
+              target.error = block.result.content
+            }
+          } else {
+            const step: SearchStep = {
+              type: 'search',
+              key: block.id,
+              kind: 'search',
+              queries: [query],
+              results: found,
+              status,
+              ...(status === 'failed' && block.result?.content
+                ? { error: block.result.content }
+                : {}),
+            }
+            steps.push(step)
+            mergedSearch.set('search', step)
+          }
+        } else {
+          const source = found[0]
+          const url = (typeof input.url === 'string' ? input.url : '') || source?.url || ''
+          const page: PageItem = {
+            id: block.id,
+            url,
+            title: source?.title || url,
+            status,
+            ...(status === 'failed' && block.result?.content
+              ? { error: block.result.content }
+              : {}),
+          }
+          const last = steps.at(-1)
+          if (last?.type === 'open') {
+            last.pages.push(page)
+          } else {
+            steps.push({ type: 'open', pages: [page] })
+          }
+        }
+        return
+      }
       steps.push({ type: 'app_tool', key: block.id, call: block })
       return
     }

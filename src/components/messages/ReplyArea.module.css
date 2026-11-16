@@ -46,6 +46,12 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+.vrmIcon {
+  width: 24px;
+  height: 24px;
+  margin-block: -4px;
+}
+
 .titleText {
   margin-right: 6px;
   font: var(--dsw-font-markdown-base);

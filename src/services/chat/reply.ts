@@ -7,6 +7,7 @@ import type {
   OutputBlockStart,
   TextBlockParam,
 } from '../api/types.js'
+import { citedSourceContext } from '../search/history.js'
 import type {
   AssistantMessage,
   FileAttachment,
@@ -182,7 +183,11 @@ export const settleReply = (
           result: {
             type: 'tool_result',
             tool_use_id: block.id,
-            content: translate('appToolInterrupted'),
+            content: translate(
+              ['web_search', 'web_fetch'].includes(block.name)
+                ? 'searchInterrupted'
+                : 'appToolInterrupted'
+            ),
             is_error: true,
           },
         },
@@ -242,7 +247,10 @@ const isUsableReply = (message: Message): message is AssistantMessage => {
 }
 
 /** 有文件时用内容块数组：先文件后文本，文件按 Files API 的 file_id 引用 */
-const toUserParam = ({ content, files }: UserMessage, localFiles = false): MessageParam => {
+const toUserParam = (
+  { content, files }: UserMessage,
+  localFiles = false
+): Extract<MessageParam, { role: 'user' }> => {
   const blocks = toFileBlocks(files, localFiles)
   return blocks.length === 0
     ? { role: 'user', content }
@@ -354,6 +362,19 @@ export const toToolExchange = (
   },
 ]
 
+const withCitedSources = (
+  message: Extract<MessageParam, { role: 'user' }>,
+  blocks: ReplyBlock[]
+): Extract<MessageParam, { role: 'user' }> => {
+  const context = citedSourceContext(blocks)
+  if (!context) {
+    return message
+  }
+  return typeof message.content === 'string'
+    ? { ...message, content: `${message.content}\n\n${context}` }
+    : { ...message, content: [...message.content, { type: 'text', text: context }] }
+}
+
 /** 历史中会进入请求上下文的轮次：提问后紧跟可用回答的才保留 */
 export const getContextRounds = (history: Message[]): [UserMessage, AssistantMessage][] => {
   const rounds: [UserMessage, AssistantMessage][] = []
@@ -394,21 +415,31 @@ export const toRequestMessages = (
       continue
     }
     appendReminder(reply.latestReminder)
-    messages.push(toUserParam(user, localFiles))
+    const userParam = toUserParam(user, localFiles)
+    messages.push(reply.searchConfig ? withCitedSources(userParam, reply.blocks) : userParam)
     let start = 0
     for (const end of reply.toolRoundEnds ?? []) {
-      messages.push(
-        ...toToolExchange(
-          reply.blocks.slice(start, end),
-          localFiles
-            ? reply.providerMessages?.find((round) => round.end === end)?.message
-            : undefined
+      const round = reply.blocks.slice(start, end)
+      const compacted = reply.searchConfig
+        ? round.filter(
+            (block) =>
+              block.type !== 'tool_use' || !['web_search', 'web_fetch'].includes(block.name)
+          )
+        : round
+      if (compacted.some((block) => block.type === 'tool_use')) {
+        messages.push(
+          ...toToolExchange(
+            compacted,
+            localFiles && !reply.searchConfig
+              ? reply.providerMessages?.find((round) => round.end === end)?.message
+              : undefined
+          )
         )
-      )
+      }
       start = end
     }
     const assistant = toAssistantParam({ blocks: reply.blocks.slice(start) })
-    if (localFiles) {
+    if (localFiles && !reply.searchConfig) {
       assistant.providerMessage = reply.providerMessages?.find(
         (round) => round.end === reply.blocks.length
       )?.message

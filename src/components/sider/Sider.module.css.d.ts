@@ -1,6 +1,8 @@
 declare const styles: {
   readonly sider: string
   readonly top: string
+  readonly brand: string
+  readonly brandMark: string
   readonly appName: string
   readonly configuration: string
   readonly configurationButton: string

@@ -15,6 +15,134 @@ export const en = {
   sessionDeleteFailed: 'Unable to delete this chat. Please try again.',
   settings: 'Settings',
   settingsApps: 'Connected apps',
+  githubSummary: 'Read repos, files and issues',
+  magpieSummary: 'Use desktop models and routing groups',
+  magpieDescription: 'Use models, subscriptions and routing groups from your local Magpie gateway.',
+  magpieLocalHint:
+    'Magpie must be running at its default address, 127.0.0.1:3425. The application server checks the connection without reading upstream provider keys.',
+  magpieConnect: 'Detect desktop app',
+  magpieChecking: 'Checking…',
+  magpieRefreshing: 'Refreshing…',
+  magpieRefresh: 'Refresh models',
+  magpieRetry: 'Reconnect',
+  magpieNoModels:
+    'Magpie is connected but has no available models. Add a provider in Magpie first.',
+  magpieModel: 'Chat model or routing group',
+  magpieModelHint:
+    'Choose a provider on the left and a model on the right, or enter provider/model or group/... directly; changes apply after saving.',
+  magpieProviders: 'Provider',
+  magpieAllModels: 'All models',
+  magpieModelCount: '{count} models',
+  magpieShowAllModels: 'Show all',
+  magpieHideModels: 'Hide models',
+  magpieNoMatchingModels: 'No matching models. You can enter a full model ID and save it.',
+  magpieOtherModels: 'Other',
+  magpieModelSearchPlaceholder: 'Filter by model ID or name',
+  magpieUseModel: 'Use a Magpie model',
+  magpieManualCapabilities:
+    'For an unlisted model, adjust reasoning and image support under Models & providers.',
+  magpieStorageTitle: 'Access and storage',
+  magpieStorage:
+    'The connection only reads the local model catalog. Magpie keeps upstream API keys and subscription credentials. This app stores only the local gateway address, model selection and local magpie token.',
+  magpieDocs: 'Open Magpie documentation',
+  magpieUnavailable:
+    'Magpie was not detected. Check that the desktop app is running at 127.0.0.1:3425 and try again.',
+  magpieUnauthorized: 'Magpie rejected the local gateway token. Check its settings and try again.',
+  magpieGatewayError: 'The Magpie gateway returned an error. Check the desktop app logs and retry.',
+  magpieInvalidResponse:
+    'Magpie responded with an unrecognized model catalog. Update Magpie and try again.',
+  magpieLocalOnly: 'A Magpie desktop connection requires the application server on this computer.',
+  magpieNetworkError:
+    'The application server is unavailable. Start it with pnpm dev or pnpm start and try again.',
+  magpieSelectModel: 'Select or enter a Magpie model to use.',
+  magpieStaleCatalog:
+    'Showing the last successful catalog. Reconnect before saving changes; your active model configuration is unchanged.',
+  magpieModelMissing:
+    'The saved model is absent from the latest catalog. Its configuration is unchanged; manually entered model IDs can still be used.',
+  magpieBaseUrlHint:
+    'The local OpenAI-compatible address of the Magpie desktop app, detected by its connection card.',
+  wechatSummary: 'Connect Weixin ClawBot with a QR code',
+  wechatName: 'Weixin',
+  wechatDescription:
+    'Reuse Tencent’s OpenClaw Weixin iLink channel to bind this server and chat with AI in Weixin.',
+  wechatUnavailable:
+    'Weixin QR connection requires the application server via pnpm dev or pnpm start. Static pages and file:// are not supported.',
+  wechatBotName: 'Weixin ClawBot connection',
+  wechatDisconnect: 'Disconnect',
+  wechatDisconnecting: 'Disconnecting…',
+  wechatConnectedHint:
+    'Messages are handled independently by the server and are not synchronized with web chats. The last 12 turns are kept per contact; send /clear or /new to reset.',
+  wechatAiNotConfigured:
+    'Weixin AI is not configured. Set WECHAT_AI_API_KEY on the server and restart it.',
+  wechatMessagingReady:
+    'AI replies are enabled: {model}. Weixin messages are handled while the server is running.',
+  wechatMessagingRetrying: 'The message connection was interrupted. Reconnecting…',
+  wechatMessagingStarting: 'Starting the Weixin message listener…',
+  wechatMessagingExpired: 'Weixin credentials expired. Reconnect with a new QR code.',
+  wechatScanned: 'QR code scanned. Confirm the connection in Weixin…',
+  wechatPinRequired: 'Weixin requires numeric verification. Enter the number below.',
+  wechatScanHint: 'Scan this QR code with Weixin and confirm the connection on your phone.',
+  wechatPinLabel: 'Number shown on your phone',
+  wechatPinHint: 'Enter the complete number shown in Weixin without spaces.',
+  wechatInvalidPin: 'Enter the number shown on your phone, up to 16 digits.',
+  wechatPinMismatch: 'The number did not match. Check Weixin and try again.',
+  wechatPinSubmit: 'Submit number',
+  wechatPinSubmitting: 'Submitting…',
+  wechatStarting: 'Getting QR code…',
+  wechatReconnect: 'Reconnect with QR code',
+  wechatConnect: 'Connect Weixin with QR code',
+  wechatStorageTitle: 'Access and credential storage',
+  wechatStorage:
+    'The bot token is stored in data/wechat/connections.json on the server; Weixin context and sync cursors are stored in *.messages.json in the same directory. Neither enters browser storage. Set WECHAT_DATA_DIR to change the directory. Do not share or commit these files.',
+  wechatScope:
+    'Only new ClawBot messages received after binding are processed; existing personal chats, contacts and group chats are not read. By default, only the person who scanned the QR code can use AI. Disconnecting removes local credentials and this connection’s message data but does not unbind Weixin.',
+  wechatSource: 'View Tencent OpenClaw Weixin source',
+  wechatQrAlt: 'Weixin ClawBot connection QR code',
+  wechatQrPreparing: 'Generating QR code',
+  wechatSessionFailed: 'Unable to check the Weixin connection. Please retry.',
+  wechatLoginExpired: 'The QR code expired or login timed out. Please reconnect.',
+  wechatAlreadyConnected:
+    'Weixin reports an existing binding, but this browser has no usable connection. Check for an existing OpenClaw or browser binding and retry.',
+  wechatStorageFailed:
+    'Weixin confirmed the connection, but saving credentials failed. Check permissions for data/wechat and retry.',
+  wechatLoginFailed: 'Unable to complete Weixin QR connection. Check the network and retry.',
+  wechatDisconnectFailed: 'Unable to remove local Weixin credentials. Check the network and retry.',
+  connectorNotChecked: 'Not checked',
+  connectorUnavailable: 'Not connected',
+  connectorEnabled: 'In use',
+  connectorInstalled: 'Installed',
+  connectorNotSignedIn: 'Not signed in',
+  connectorConnected: 'Connected',
+  connectorChecking: 'Checking',
+  connectorRefreshing: 'Refreshing',
+  connectorConnecting: 'Authorizing',
+  githubOAuthWaiting: 'Finishing the GitHub connection. The result will appear here…',
+  githubOAuthPopupBlocked: 'Unable to open the authorization tab. Allow pop-ups and try again.',
+  githubOAuthTimedOut: 'Authorization timed out. Please connect again.',
+  githubOAuthCancelled: 'Authorization cancelled.',
+  githubEnabled: 'Use GitHub in chats',
+  githubConnectionList: 'Connections',
+  githubAddConnection: 'Add connection',
+  githubNoConnections: 'No GitHub accounts connected yet.',
+  githubConnectionName: 'Connection name',
+  githubDefaultConnection: 'Default',
+  githubUseConnection: 'Set as default',
+  githubUseConnectionNamed: 'Set as default: {name}',
+  githubDisconnectNamed: 'Disconnect: {name}',
+  githubConfigureConnection: 'Configure',
+  githubConfigureConnectionNamed: 'Configure: {name}',
+  githubSaveConnection: 'Save changes',
+  githubConnectionSaved: 'Saved',
+  githubTokenConnection: 'Token',
+  githubOAuthConnection: 'GitHub sign-in',
+  githubReplaceToken: 'Replace token (leave empty to keep)',
+  githubReauthorize: 'Reauthorize',
+  githubChooseConnection: 'Choose a default connection to use in chats.',
+  githubDefaultHint: 'Chats use the default connection. You can keep multiple accounts or tokens.',
+  githubPermissions: 'Permissions and storage',
+  githubSessionFailed: 'Unable to check GitHub sign-in status. Please retry.',
+  githubAccountMismatch:
+    'The new token belongs to a different account. Use “Add connection” instead.',
   githubDescription:
     'Let AI read GitHub repositories, issues and files, and create issues after your approval.',
   githubToken: 'GitHub Personal Access Token',
@@ -30,7 +158,8 @@ export const en = {
   githubDisconnecting: 'Disconnecting…',
   githubOAuthLogin: 'Sign in with GitHub',
   githubOAuthChecking: 'Checking sign-in status…',
-  githubOAuthDescription: 'Sign in and authorize access on GitHub, then return here automatically.',
+  githubOAuthDescription:
+    'Authorize GitHub in a new tab. This page updates the connection automatically.',
   githubOAuthPrivate: 'Access private repositories (requests repo scope)',
   githubTokenFallback: 'Connect with a Personal Access Token',
   githubOAuthUnconfigured:
@@ -41,6 +170,12 @@ export const en = {
   githubOAuthInvalidState:
     'The authorization request expired or does not match this browser. Please sign in again.',
   githubOAuthFailed: 'GitHub sign-in failed. Please try again.',
+  githubOAuthNetworkError:
+    'The app server cannot reach GitHub. Check its proxy settings and try again.',
+  githubOAuthCredentialsError:
+    'GitHub app credentials are invalid. Check the server Client ID and Client Secret.',
+  githubOAuthCodeExpired:
+    'The GitHub authorization code is no longer valid. Close the old authorization tab and sign in again.',
   githubOAuthExpired: 'Your GitHub session expired or access was revoked. Please sign in again.',
   githubOAuthLogoutFailed:
     'Unable to end the GitHub server session. Check your network and disconnect again.',
@@ -175,6 +310,9 @@ export const en = {
   settingsTtsVoice: 'Read-aloud voice',
   settingsTtsVoiceStella: 'Stella (female)',
   settingsTtsVoiceTide: 'Tide (male)',
+  settingsAutoTitle: 'Generate chat titles automatically',
+  settingsAutoTitleDescription:
+    'Generate a title alongside the first reply. When off, the title stays “New chat”.',
   settingsLocation: 'Location',
   settingsLocationProvince: 'Select province/region',
   settingsLocationCity: 'Select city',
@@ -289,12 +427,48 @@ export const en = {
   providerInvalidUrl:
     'Use an HTTPS API URL, or HTTP on localhost, without credentials, query parameters or fragments.',
   providerChooseModel: 'Choose model and provider',
-  providerNativeSearchOnly: 'Web search requires the DeepSeek native channel',
   providerUnsupportedAttachment:
     'Use images or text/code attachments supported by this model. PDF and Office documents require the DeepSeek native channel.',
   providerAttachmentMissing: 'The local original of {name} is missing. Please attach it again.',
   providerTextTooLarge: 'Individual text attachments sent through pi must not exceed 1 MiB.',
   providerRequestFailed: 'Model request failed. Check your provider configuration.',
+  searchInvalidArguments: 'Invalid search tool name or arguments. No search or fetch was executed.',
+  searchNotConfigured: 'Configure a search provider and API key in Settings first.',
+  searchCallLimit:
+    'The search/fetch limit for this round or reply has been reached. Answer using the available results.',
+  searchInvalidResponse: 'The search service returned an unrecognized response.',
+  searchRequestFailed: 'Search failed. Check the search service configuration and retry.',
+  searchUnauthorized: 'The search service API key is invalid or expired. Replace it and retry.',
+  searchInsufficientBalance: 'The search service account has insufficient balance.',
+  searchRateLimited: 'The search service rate limit was reached. Try again later.',
+  searchTimeout: 'The search service request timed out. Try again later.',
+  searchInterrupted: 'Search or webpage extraction was interrupted before a result was available.',
+  settingsSearch: 'Search service',
+  searchSettingsDescription:
+    'Chat models use independent search providers through unified tools. Search providers may bill separately.',
+  searchProviderLabel: 'Default search provider',
+  searchProviderNone: 'Not selected',
+  searchToken: 'Search service API Key',
+  searchDeepseekKeyReused:
+    'A DeepSeek API key was found under Data. It will be reused directly; no need to enter it again.',
+  searchUseSeparateKey: 'Use a separate search key',
+  searchReuseDeepseekKey: 'Reuse saved DeepSeek key',
+  searchDeepseekTokenHint:
+    'Enter a separate search key, or go back to reusing your saved DeepSeek key.',
+  searchTokenHint:
+    'Keys stay in this browser and are sent only to this application server for requests. They are excluded from chats and history ZIP files.',
+  searchMaxResults: 'Results per search (1–10)',
+  searchSave: 'Save and use',
+  searchSaved: 'Search service settings saved',
+  searchServerRequired:
+    'Independent search requires pnpm dev or pnpm start. Static deployments retain only the DeepSeek native compatibility path.',
+  searchStaticTooltip: 'Search · DeepSeek static compatibility',
+  searchProviderTooltip: 'Search · {provider}',
+  searchUnsupportedTools:
+    'Tool calling is disabled for this model; the app will retrieve before answering',
+  providerToolCalling: 'Tool calling support',
+  searchRetrieving: 'Retrieving web results',
+  searchRetrieveFailed: 'Retrieval failed; the model will answer from its existing knowledge',
   settingsLocaleZhCN: 'Simplified Chinese',
   settingsLocaleEnUS: 'English',
 } satisfies Record<keyof typeof zh, string>

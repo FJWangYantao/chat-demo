@@ -35,6 +35,7 @@ import { Markdown } from '../markdown/Markdown.js'
 import { ToolCallContent } from './ToolCalls.js'
 import { SiteThumbnails } from '../search/SiteLogo.js'
 import { toggleSearchPanel, useSearchPanel } from '../search/searchPanelState.js'
+import { VrmStateIcon } from '../vrm/VrmStateIcon.js'
 import styles from './ReplyArea.module.css'
 import './thinking.markdown.css'
 
@@ -97,7 +98,11 @@ export const ReplyArea = memo(function ReplyArea({
           onClick={() => setOpen((value) => !value)}
         >
           <span className={clsx(styles.titleIcon, stopped && styles.stoppedIcon)}>
-            <IconThinkOutline16 />
+            {titleActive ? (
+              <VrmStateIcon state="working" className={styles.vrmIcon} />
+            ) : (
+              <IconThinkOutline16 />
+            )}
           </span>
           <span className={clsx(styles.titleText, titleActive && styles.shimmer)}>{title}</span>
           {expanded ? <IconChevronDownOutline14 /> : <IconChevronRightOutline14 />}
@@ -256,7 +261,7 @@ const SearchRow = ({
   } else if (interrupted) {
     body = <span>{t('searchStopped')}</span>
   } else if (failed) {
-    body = <span>{t('toolSearchFail')}</span>
+    body = <span>{step.error ?? t('toolSearchFail')}</span>
   } else if (count === 0) {
     body = (
       <span>{t(isDeepSearchKind(step.kind) ? 'toolSearchNoResult' : 'messageSearchNoResult')}</span>
@@ -353,12 +358,16 @@ const OpenRow = ({
       isLast={isLast}
     >
       {allFailed ? (
-        t('toolOpenFail')
+        (step.pages.find((page) => page.error)?.error ?? t('toolOpenFail'))
       ) : (
         <>
           <span className={styles.intro}>{intro}</span>
           {step.pages.slice(0, 5).map((page) => (
-            <PageLink key={page.id} page={page} failedTip={t('toolOpenFailTooltip')} />
+            <PageLink
+              key={page.id}
+              page={page}
+              failedTip={page.error ?? t('toolOpenFailTooltip')}
+            />
           ))}
           {count > 5 ? (
             <span

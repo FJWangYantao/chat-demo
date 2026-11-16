@@ -1,7 +1,11 @@
 import { useEffect, useId, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
+import { useMagpie } from '../../services/apps/magpieConnection.js'
 import {
   CUSTOM_PROVIDER,
+  MAGPIE_BASE_URL,
+  MAGPIE_LOCAL_KEY,
+  MAGPIE_PROVIDER,
   NATIVE_PROVIDER,
   PROVIDER_APIS,
   getActiveModelConfiguration,
@@ -19,6 +23,7 @@ import styles from './ProviderSettings.module.css'
 export const ProviderSettings = () => {
   const t = useTranslate()
   const catalog = useProviders((state) => state.catalog)
+  const magpieModels = useMagpie((state) => state.models)
   const profiles = useProviders((state) => state.profiles)
   const active = useProviders((state) => state.active)
   const available = useProviders((state) => state.available)
@@ -39,6 +44,7 @@ export const ProviderSettings = () => {
   }
   const choices = [
     native,
+    { id: MAGPIE_PROVIDER, name: 'Magpie', models: magpieModels },
     ...catalog,
     { id: CUSTOM_PROVIDER, name: t('providerCustom'), models: [] },
   ]
@@ -74,6 +80,7 @@ export const ProviderSettings = () => {
       <label htmlFor={`${id}-provider`}>{t('providerLabel')}</label>
       <select
         id={`${id}-provider`}
+        name="provider"
         value={selected}
         onChange={(event) => setSelected(event.target.value)}
       >
@@ -100,14 +107,18 @@ const ProfileEditor = ({
   const id = useId()
   const native = provider.id === NATIVE_PROVIDER
   const custom = provider.id === CUSTOM_PROVIDER
+  const magpie = provider.id === MAGPIE_PROVIDER
   const nativeKey = useSettings((state) => state.apiKey)
   const first = provider.models[0]
   const [model, setModel] = useState(profile?.model ?? first?.id ?? '')
-  const [apiKey, setKey] = useState(native ? (nativeKey ?? '') : (profile?.apiKey ?? ''))
-  const [baseUrl, setBaseUrl] = useState(profile?.baseUrl ?? '')
+  const [apiKey, setKey] = useState(
+    native ? (nativeKey ?? '') : (profile?.apiKey ?? (magpie ? MAGPIE_LOCAL_KEY : ''))
+  )
+  const [baseUrl, setBaseUrl] = useState(profile?.baseUrl ?? (magpie ? MAGPIE_BASE_URL : ''))
   const [api, setApi] = useState(profile?.api ?? first?.api ?? 'openai-completions')
   const [reasoning, setReasoning] = useState(profile?.reasoning ?? first?.reasoning ?? false)
   const [imageInput, setImageInput] = useState(profile?.imageInput ?? first?.imageInput ?? false)
+  const [toolCalling, setToolCalling] = useState(profile?.toolCalling ?? true)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const known = provider.models.find((item) => item.id === model)
@@ -119,6 +130,7 @@ const ProfileEditor = ({
       setApi(match.api)
       setReasoning(match.reasoning)
       setImageInput(match.imageInput)
+      setToolCalling(match.toolCalling ?? true)
     }
   }
   return (
@@ -158,6 +170,7 @@ const ProfileEditor = ({
           api: known?.api ?? api,
           reasoning: known?.reasoning ?? reasoning,
           imageInput: known?.imageInput ?? imageInput,
+          toolCalling: known?.toolCalling ?? toolCalling,
         })
         setSaved(true)
       }}
@@ -165,6 +178,7 @@ const ProfileEditor = ({
       <label htmlFor={`${id}-model`}>{t('providerModel')}</label>
       <input
         id={`${id}-model`}
+        name="model-id"
         list={`${id}-models`}
         value={model}
         required
@@ -181,36 +195,49 @@ const ProfileEditor = ({
           </option>
         ))}
       </datalist>
-      <label htmlFor={`${id}-key`}>API Key</label>
-      <input
-        id={`${id}-key`}
-        type="password"
-        value={apiKey}
-        onChange={(event) => setKey(event.target.value)}
-        required={!custom}
-        autoComplete="off"
-        spellCheck={false}
-        aria-describedby={`${id}-key-hint`}
-      />
-      <p id={`${id}-key-hint`}>{t(custom ? 'providerKeyOptional' : 'providerKeyHint')}</p>
+      {!magpie ? (
+        <>
+          <label htmlFor={`${id}-key`}>API Key</label>
+          <input
+            id={`${id}-key`}
+            name="api-key"
+            type="password"
+            value={apiKey}
+            onChange={(event) => setKey(event.target.value)}
+            required={!custom}
+            autoComplete="off"
+            spellCheck={false}
+            aria-describedby={`${id}-key-hint`}
+          />
+          <p id={`${id}-key-hint`}>{t(custom ? 'providerKeyOptional' : 'providerKeyHint')}</p>
+        </>
+      ) : null}
       {!native ? (
         <>
           <label htmlFor={`${id}-url`}>{t('providerBaseUrl')}</label>
           <input
             id={`${id}-url`}
+            name="base-url"
             type="url"
             value={baseUrl}
             onChange={(event) => setBaseUrl(event.target.value)}
-            required={custom}
+            required={custom || magpie}
+            readOnly={magpie}
             placeholder={known?.baseUrl ?? 'https://api.example.com/v1'}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? `${id}-error` : `${id}-url-hint`}
           />
-          <p id={`${id}-url-hint`}>{t('providerBaseUrlHint')}</p>
+          <p id={`${id}-url-hint`}>{t(magpie ? 'magpieBaseUrlHint' : 'providerBaseUrlHint')}</p>
           {custom || !known ? (
             <>
               <label htmlFor={`${id}-api`}>{t('providerApi')}</label>
-              <select id={`${id}-api`} value={api} onChange={(event) => setApi(event.target.value)}>
+              <select
+                id={`${id}-api`}
+                name="api-protocol"
+                value={api}
+                disabled={magpie}
+                onChange={(event) => setApi(event.target.value)}
+              >
                 {PROVIDER_APIS.map((value) => (
                   <option key={value} value={value}>
                     {value}
@@ -224,6 +251,7 @@ const ProfileEditor = ({
                 <label htmlFor={`${id}-reasoning`}>
                   <input
                     id={`${id}-reasoning`}
+                    name="reasoning"
                     type="checkbox"
                     checked={reasoning}
                     onChange={(event) => setReasoning(event.target.checked)}
@@ -233,11 +261,22 @@ const ProfileEditor = ({
                 <label htmlFor={`${id}-images`}>
                   <input
                     id={`${id}-images`}
+                    name="image-input"
                     type="checkbox"
                     checked={imageInput}
                     onChange={(event) => setImageInput(event.target.checked)}
                   />
                   {t('providerImages')}
+                </label>
+                <label htmlFor={`${id}-tools`}>
+                  <input
+                    id={`${id}-tools`}
+                    name="tool-calling"
+                    type="checkbox"
+                    checked={toolCalling}
+                    onChange={(event) => setToolCalling(event.target.checked)}
+                  />
+                  {t('providerToolCalling')}
                 </label>
               </div>
             </>

@@ -107,6 +107,7 @@
 }
 
 .approval {
+  position: relative;
   margin-block: 6px 12px;
   padding: 10px 12px;
   border-inline-start: 2px solid var(--dsw-alias-brand-primary);
@@ -118,6 +119,7 @@
 
   p {
     margin-block: 0 10px;
+    padding-right: 60px;
   }
 
   dl {
@@ -143,6 +145,21 @@
     white-space: pre-wrap;
     font: inherit;
   }
+}
+
+.doneIcon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.waitingIcon {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  width: 48px;
+  height: 48px;
+  pointer-events: none;
 }
 
 .actions {

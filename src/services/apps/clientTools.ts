@@ -1,18 +1,34 @@
 import { translate } from '../../i18n/index.js'
 import type { ToolCallPart } from '../chat/types.js'
+import { describeSearchError } from '../search/client.js'
+import {
+  createSearchExecutionContext,
+  executeSearchTool,
+  type SearchExecutionContext,
+} from '../search/execute.js'
+import { SEARCH_ROUND_CONTENT_LIMIT } from '../search/sources.js'
+import { isSearchTool } from '../search/tools.js'
 import { waitForToolApproval } from './approvals.js'
-import { executeGitHubCall, isGitHubWriteTool, useGitHub, validateGitHubCall } from './github.js'
+import { executeGitHubCall, isGitHubWriteTool, validateGitHubCall } from './github.js'
+import { getGitHubConnection, useGitHub } from './githubConnection.js'
 
 export const CLIENT_TOOL_CONCURRENCY = 50
+export const SEARCH_TOOL_CONCURRENCY = 4
 export const TOOL_ROUND_LIMIT = 8
 export const TOOL_CALL_LIMIT = TOOL_ROUND_LIMIT * CLIENT_TOOL_CONCURRENCY
+
+export { createSearchExecutionContext }
+export type { SearchExecutionContext }
 
 export const runClientTool = async (
   call: ToolCallPart,
   sessionId: string,
   messageId: string,
   signal: AbortSignal,
-  update: (call: ToolCallPart) => void
+  update: (call: ToolCallPart) => void,
+  connection = getGitHubConnection(),
+  revision = useGitHub.getState().revision,
+  searchContext: SearchExecutionContext = createSearchExecutionContext(null, '')
 ): Promise<void> => {
   const finish = (status: ToolCallPart['status'], content: string, isError = false) =>
     update({
@@ -20,14 +36,19 @@ export const runClientTool = async (
       status,
       result: { type: 'tool_result', tool_use_id: call.id, content, is_error: isError },
     })
+  const search = isSearchTool(call.name)
   try {
     signal.throwIfAborted()
     if (call.inputJson !== undefined) {
-      throw new Error(translate('githubInvalidArguments'))
+      throw new Error(translate(search ? 'searchInvalidArguments' : 'githubInvalidArguments'))
+    }
+    if (search) {
+      update({ ...call, status: 'running' })
+      finish('done', await executeSearchTool(call, searchContext, signal))
+      return
     }
     validateGitHubCall(call.name, call.input)
-    const connection = useGitHub.getState().connection
-    if (!connection) {
+    if (!connection || useGitHub.getState().revision !== revision) {
       throw new Error(translate('githubDisconnected'))
     }
     if (isGitHubWriteTool(call.name)) {
@@ -39,7 +60,12 @@ export const runClientTool = async (
       }
     }
     signal.throwIfAborted()
-    if (useGitHub.getState().connection !== connection) {
+    const current = getGitHubConnection()
+    if (
+      current?.id !== connection.id ||
+      current.token !== connection.token ||
+      useGitHub.getState().revision !== revision
+    ) {
       throw new Error(translate('githubDisconnected'))
     }
     update({ ...call, status: 'running' })
@@ -52,7 +78,15 @@ export const runClientTool = async (
     finish('done', result)
   } catch (error) {
     signal.throwIfAborted()
-    finish('error', error instanceof Error ? error.message : translate('unknownError'), true)
+    finish(
+      'error',
+      search
+        ? describeSearchError(error)
+        : error instanceof Error
+          ? error.message
+          : translate('unknownError'),
+      true
+    )
   }
 }
 
@@ -61,10 +95,34 @@ export const runClientTools = async (
   sessionId: string,
   messageId: string,
   signal: AbortSignal,
-  update: (call: ToolCallPart, index: number) => void
+  update: (call: ToolCallPart, index: number) => void,
+  searchContext: SearchExecutionContext = createSearchExecutionContext(null, '')
 ): Promise<void> => {
+  const connection = getGitHubConnection()
+  const revision = useGitHub.getState().revision
+  searchContext.roundCalls = 0
+  searchContext.roundContent = SEARCH_ROUND_CONTENT_LIMIT
   const run = (index: number) =>
-    runClientTool(calls[index], sessionId, messageId, signal, (call) => update(call, index))
+    runClientTool(
+      calls[index],
+      sessionId,
+      messageId,
+      signal,
+      (call) => update(call, index),
+      connection,
+      revision,
+      searchContext
+    )
+  const runPool = async (indexes: number[], concurrency: number) => {
+    let next = 0
+    const worker = async () => {
+      while (next < indexes.length) {
+        signal.throwIfAborted()
+        await run(indexes[next++])
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, indexes.length) }, worker))
+  }
   let start = 0
   while (start < calls.length) {
     signal.throwIfAborted()
@@ -77,17 +135,17 @@ export const runClientTools = async (
     while (end < calls.length && !isGitHubWriteTool(calls[end].name)) {
       end += 1
     }
-    let next = start
-    const worker = async () => {
-      while (next < end) {
-        signal.throwIfAborted()
-        const index = next++
-        await run(index)
-      }
-    }
-    const results = await Promise.allSettled(
-      Array.from({ length: Math.min(CLIENT_TOOL_CONCURRENCY, end - start) }, worker)
-    )
+    const indexes = Array.from({ length: end - start }, (_, index) => start + index)
+    const results = await Promise.allSettled([
+      runPool(
+        indexes.filter((index) => !isSearchTool(calls[index].name)),
+        CLIENT_TOOL_CONCURRENCY
+      ),
+      runPool(
+        indexes.filter((index) => isSearchTool(calls[index].name)),
+        SEARCH_TOOL_CONCURRENCY
+      ),
+    ])
     signal.throwIfAborted()
     for (const result of results) {
       if (result.status === 'rejected') {

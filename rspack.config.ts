@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
 import { rspack, type Configuration } from '@rspack/core'
 import { createGitHubOAuthMiddleware } from './server/githubOAuth.ts'
+import { createMagpieMiddleware } from './server/magpie.ts'
 import { createPiProviderMiddleware } from './server/piProvider.ts'
+import { createSearchMiddleware } from './server/search.ts'
+import { createWeChatMiddleware } from './server/wechat/index.ts'
 
 const targets = ['chrome >= 105', 'edge >= 105', 'safari >= 16', 'firefox >= 110']
 const root = path.dirname(fileURLToPath(import.meta.url))
@@ -75,6 +78,7 @@ export const createConfig = ({
           },
           type: 'javascript/auto',
         },
+        { test: /\.(svg|png|webp|vrm|vrma|glb)$/, type: 'asset/resource' },
         { test: /\.(woff2?|ttf)$/, type: 'asset/resource' },
       ],
     },
@@ -87,7 +91,14 @@ export const createConfig = ({
       }),
       new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) }),
       new rspack.CopyRspackPlugin({
-        patterns: [{ from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' }],
+        patterns: [
+          { from: path.resolve(root, 'LICENSE'), to: 'LICENSE', toType: 'file' },
+          {
+            from: path.resolve(root, 'src/assets/app/favicon.png'),
+            to: 'favicon.png',
+            toType: 'file',
+          },
+        ],
       }),
     ],
     performance: { hints: false },
@@ -95,6 +106,9 @@ export const createConfig = ({
       port: 8090,
       setupMiddlewares: (middlewares) => {
         middlewares.unshift(
+          { name: 'search', middleware: createSearchMiddleware() },
+          { name: 'wechat', middleware: createWeChatMiddleware() },
+          { name: 'magpie', middleware: createMagpieMiddleware() },
           { name: 'pi-provider', middleware: createPiProviderMiddleware() },
           { name: 'github-oauth', middleware: createGitHubOAuthMiddleware() }
         )

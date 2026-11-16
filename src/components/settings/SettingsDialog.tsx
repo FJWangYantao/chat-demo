@@ -1,11 +1,12 @@
 import clsx from 'clsx'
-import { useRef, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, type ReactNode } from 'react'
 import {
   IconDarkOutline16,
   IconDataOutline16,
   IconDownloadOutline16,
   IconFollowsystemOutline16,
   IconLightOutline16,
+  IconSearchOutline16,
   IconSettingsOutline16,
   IconUploadOutline14,
 } from '../base/icons.js'
@@ -20,6 +21,7 @@ import { useChatStore } from '../../services/chat/store.js'
 import { regionCodes, getRegionName, provinces } from '../../services/location.js'
 import {
   isChineseBrowser,
+  setAutoTitle,
   setLocale,
   setLocation,
   setThemePreference,
@@ -34,12 +36,13 @@ import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
 import { ApiKeyConfirm, ApiKeyField, useApiKeyEditor } from './ApiKeyField.js'
 import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
-import { GitHubConnection } from './GitHubConnection.js'
+import { AppConnections } from './AppConnections.js'
 import { ProviderSettings } from './ProviderSettings.js'
+import { SearchSettings } from './SearchSettings.js'
 import styles from './Settings.module.css'
 
 /**
- * 设置弹窗：通用设置、数据管理、应用连接与模型服务商。
+ * 设置弹窗：通用设置、数据管理、应用连接、模型服务商与独立搜索服务。
  * 桌面端为居中弹窗、左侧导航；移动端为底部弹层、导航横排在内容上方
  */
 export const SettingsDialog = () => {
@@ -53,9 +56,10 @@ const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode
     label: 'settingDialogAsideGeneralOptionLabel',
     icon: <IconSettingsOutline16 />,
   },
-  { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
-  { value: 'apps', label: 'settingsApps', icon: <IconSettingsOutline16 /> },
   { value: 'providers', label: 'settingsProviders', icon: <IconSettingsOutline16 /> },
+  { value: 'search', label: 'settingsSearch', icon: <IconSearchOutline16 /> },
+  { value: 'apps', label: 'settingsApps', icon: <IconSettingsOutline16 /> },
+  { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
 ]
 
 const SettingsContent = () => {
@@ -101,14 +105,17 @@ const SettingsContent = () => {
           {section === 'general' ? (
             <>
               <ThemeSetting />
+              <AutoTitleSetting />
               <LocaleSetting />
               <TtsVoiceSetting />
               <LocationSetting />
             </>
           ) : section === 'providers' ? (
             <ProviderSettings />
+          ) : section === 'search' ? (
+            <SearchSettings />
           ) : section === 'apps' ? (
-            <GitHubConnection />
+            <AppConnections />
           ) : (
             <>
               <ApiKeyField editor={apiKeyEditor} />
@@ -277,6 +284,32 @@ const LocationSetting = () => {
   )
 }
 
+const AutoTitleSetting = () => {
+  const t = useTranslate()
+  const id = useId()
+  const autoTitle = useSettings((state) => state.autoTitle)
+  return (
+    <SettingCell
+      label={t('settingsAutoTitle')}
+      description={t('settingsAutoTitleDescription')}
+      status={null}
+      labelFor={id}
+      action={
+        <input
+          {...{ switch: '' }}
+          id={id}
+          name="auto-title"
+          type="checkbox"
+          role="switch"
+          className={styles.titleSwitch}
+          checked={autoTitle}
+          onChange={(event) => setAutoTitle(event.target.checked)}
+        />
+      }
+    />
+  )
+}
+
 const LocaleSetting = () => {
   const t = useTranslate()
   const locale = useSettings((state) => state.locale)
@@ -419,18 +452,26 @@ const SettingCell = ({
   status,
   action,
   className,
+  labelFor,
 }: {
   label: string
   description?: string
   status: Status
   action: ReactNode
   className?: string
+  labelFor?: string
 }) => {
   const t = useTranslate()
   return (
     <div className={clsx(styles.cell, styles.row, className)}>
       <div className={styles.text}>
-        <div className={styles.label}>{label}</div>
+        {labelFor ? (
+          <label className={styles.label} htmlFor={labelFor}>
+            {label}
+          </label>
+        ) : (
+          <div className={styles.label}>{label}</div>
+        )}
         {status || description ? (
           <div className={clsx(styles.description, status?.error && styles.error)}>
             {status

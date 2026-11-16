@@ -23,7 +23,11 @@ import {
 import { stopReadAloud } from '../../services/speech/readAloud.js'
 import { IconButton } from '../base/IconButton.js'
 import { Tooltip } from '../base/Tooltip.js'
-import { ensureApiKey, ensureChatProvider } from '../settings/settingsDialogState.js'
+import {
+  ensureApiKey,
+  ensureChatProvider,
+  ensureSearchProvider,
+} from '../settings/settingsDialogState.js'
 import {
   getActiveModelConfiguration,
   useProviders,
@@ -32,6 +36,7 @@ import {
 import { DragMask, useFileDrop } from './DragMask.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
+import { useSearchProviders } from '../../services/search/providers.js'
 import { DraftAttachments } from './DraftAttachments.js'
 import { useVoiceInput } from './useVoiceInput.js'
 import { VoiceButton } from './VoiceButton.js'
@@ -60,8 +65,23 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
   const search = useSettings((state) => state.search)
   useProviders((state) => state.active)
   useProviders((state) => state.profiles)
+  const serverAvailable = useProviders((state) => state.available)
+  const searchProvider = useSearchProviders((state) => state.active)
+  useSearchProviders((state) => state.profiles)
   const modelConfiguration = getActiveModelConfiguration()
   const native = modelConfiguration.provider === NATIVE_PROVIDER
+  const staticNative = native && (window.location.protocol === 'file:' || serverAvailable === false)
+  const searchTooltip = !search
+    ? t('deactivatedSearchTooltip')
+    : staticNative
+      ? t('searchStaticTooltip')
+      : modelConfiguration.toolCalling === false
+        ? t('searchUnsupportedTools')
+        : searchProvider
+          ? t('searchProviderTooltip', {
+              provider: searchProvider === 'deepseek' ? 'DeepSeek' : 'Tavily',
+            })
+          : t('searchNotConfigured')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
@@ -150,7 +170,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       return
     }
     // 文本与上传完成态由提交动作读取最新快照，不使用上一次渲染的草稿。
-    if (!ensureChatProvider() || !sendMessage(sessionId)) {
+    if (!ensureChatProvider() || !ensureSearchProvider() || !sendMessage(sessionId)) {
       return
     }
     stopReadAloud()
@@ -227,14 +247,18 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
               <span className={styles.toggleLabel}>{t('thinkingSwitch')}</span>
             </button>
           </Tooltip>
-          <Tooltip content={t(native ? 'deactivatedSearchTooltip' : 'providerNativeSearchOnly')}>
+          <Tooltip content={searchTooltip}>
             <button
               type="button"
-              className={clsx(styles.toggle, search && native && styles.selected)}
+              className={clsx(styles.toggle, search && styles.selected)}
               aria-label={t('search')}
-              aria-pressed={search && native}
-              disabled={!native}
-              onClick={() => setSearch(!search)}
+              aria-pressed={search}
+              onClick={() => {
+                setSearch(!search)
+                if (!search) {
+                  ensureSearchProvider()
+                }
+              }}
             >
               <IconGlobeLanguageOutline14 />
               <span className={styles.toggleLabel}>{t('search')}</span>

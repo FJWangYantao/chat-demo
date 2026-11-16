@@ -122,7 +122,7 @@ export type ServerToolBlock =
 
 export type ToolUseBlock = { type: 'tool_use'; id: string; name: string; input: unknown }
 
-export type ClientTool = {
+export type ToolDefinition = {
   name: string
   description: string
   input_schema: {
@@ -132,6 +132,8 @@ export type ClientTool = {
     additionalProperties: false
   }
 }
+
+export type ClientTool = ToolDefinition
 
 export type ToolResultBlockParam = {
   type: 'tool_result'
@@ -200,9 +202,9 @@ export type CreateMessageRequest = {
   system: string
   messages: MessageParam[]
   thinking: { type: 'enabled' | 'disabled' }
-  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool | ClientTool)[]
+  tools: (DeepseekWebSearchTool | DeepseekReadUrlTool | ToolDefinition)[]
   safety_check: { level: 'high' }
-  title?: { enabled: boolean }
+  max_tokens?: number
 }
 
 // ---------- 响应：流式事件 ----------
@@ -244,12 +246,11 @@ export type MessageStreamEvent =
   | { type: 'content_block_stop'; index: number }
   | {
       type: 'message_delta'
-      /** title 仅在开启标题且生成成功时出现；stop_details 仅在 refusal 时出现 */
+      /** stop_details 仅在 refusal 时出现 */
       delta: {
         stop_reason: StopReason
         stop_sequence: null
         stop_details?: StopDetails
-        title?: string
       }
       usage?: MessageUsage
     }

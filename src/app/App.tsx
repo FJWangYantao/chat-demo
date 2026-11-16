@@ -16,7 +16,7 @@ import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
 import { ensureChatProvider, openSettings } from '../components/settings/settingsDialogState.js'
 import { loadProviderCatalog } from '../services/providers.js'
-import { restoreGitHubSession } from '../services/apps/github.js'
+import { restoreGitHubSession } from '../services/apps/githubConnection.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
@@ -26,6 +26,7 @@ import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
+import { VrmStateIcon } from '../components/vrm/VrmStateIcon.js'
 import styles from './App.module.css'
 
 export const App = () => {
@@ -51,6 +52,7 @@ export const App = () => {
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
+  const loadError = !ready ? initError : sessionLoadError
 
   usePreventPageScroll(isMobile)
 
@@ -107,12 +109,15 @@ export const App = () => {
               <div className={styles.loadingView}>
                 {isMobile ? <MobileHeader /> : null}
                 <div className={styles.loadingState} role="status" aria-live="polite">
+                  {loadError ? (
+                    <VrmStateIcon state="error" className={styles.errorIllustration} />
+                  ) : null}
                   <span>
-                    {(!ready ? initError : sessionLoadError)
+                    {loadError
                       ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
                       : t('sessionLoading')}
                   </span>
-                  {(!ready ? initError : sessionLoadError) ? (
+                  {loadError ? (
                     <Button
                       variant="outlined"
                       size="m"
